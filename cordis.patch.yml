@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-kiro-provider
+      name: dsh-kiro-provider
+      config: {}
