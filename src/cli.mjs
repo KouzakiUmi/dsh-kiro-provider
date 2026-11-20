@@ -148,6 +148,12 @@ export async function cliVersion(binary, options, signal) {
   return match[1];
 }
 
+// Only bounded errors authored by this plugin reach settings responses, never provider output or paths.
+export function safeProblem(error) {
+  if (error instanceof KiroProblem) return error.message;
+  return '无法完成 Kiro 设置操作；请检查连接配置后重试。';
+}
+
 // The isolated home is a Kiro configuration boundary, not an OS sandbox.
 export async function checkRuntimeHome(env) {
   const home = env.KIRO_HOME || join(homedir(), '.kiro');

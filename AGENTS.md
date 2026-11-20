@@ -1,8 +1,61 @@
 # Kiro Provider
 
 - 目标：DSH Host 直接请求 Kiro。默认浏览器 OAuth；API Key、手动短期会话和官方 CLI 为可选方式。Magpie 是协议参考，旧 `dsh-kiro` 不作为依赖。
-- `src/index.mjs` 管 Cordis 生命周期与模型路由；`src/controller.mjs` 管连接、模型与设置调用；`src/cli.mjs` 是官方二进制与隔离工作目录的唯一入口；`src/acp.mjs`/`src/adapter.mjs` 管传输和 DSH 流协议。
-- 浏览器只调用 `kiroProvider` 类型化 RPC，设置使用 Config Editor，API Key 由 DSH credentials 解析。分离模型、认证、调用快照；不读取 IDE、CLI 或 Magpie 的私有令牌文件，不改第三方客户端标识。
-- 使用独立的 `kiro-native` 模型路由；允许与旧 `kiro` 路由并存。测试只用临时目录、假凭据和模拟二进制，执行 `npm run check` 后打包。
-- `src/direct-http.mjs` 负责直连认证、主机和目录契约，`src/direct-wire.mjs` 负责会话、工具别名与历史投影，`src/direct-stream.mjs` 负责 AWS EventStream，`src/direct.mjs` 将这条路径注入宿主 `PiAiAdapter`，不启用额外服务器。凭据由 DSH 引用解析，不进入设置响应或 SDK 占位参数。
-- `src/oauth.mjs` 持有登录任务和临时回环回调，`src/oauth-wire.mjs` 负责 PKCE 与 Kiro/AWS 交换，`src/oauth-grant.mjs` 通过 DSH 凭据服务保存和续期独立授权。仅登录开始返回授权链接；轮询不返回授权码、令牌或 verifier。验收结果和协议参考见 [设计说明](docs/design.md)。
+- 使用独立的 `kiro-native` 模型路由；允许与旧 `kiro` 路由并存。测试只用临时目录、假凭据和模拟二进制，执行 `npm run check`（构建 + 产物语法自检 + 测试）后打包。
+
+## 目录拓扑与依赖方向
+
+Host（Node ESM，`src/*.mjs`，构建原样复制到 `lib/`）：
+
+```
+index.mjs（组合根：Config + apply + 生命周期）
+├── llm-adapter.mjs（LlmAdapter：listModels/prepareCall/stream，直连与 ACP 分派）
+├── service.mjs（kiroProvider RPC：op 白名单分派）
+├── controller.mjs（连接编排：snapshot/target/凭据解析/status 视图）
+│   ├── catalog.mjs + usage.mjs（两类资源：解析、校验、TTL 配置）
+│   │   └── resource.mjs（拉取/读取分离中间件：read/refresh/revalidate/reset）
+│   │       └── store.mjs（持久化中间件：原子写、锁、指纹键、失效）
+│   └── 传输层：cli.mjs / direct-http.mjs / direct-wire.mjs / direct-stream.mjs / direct.mjs / acp.mjs / adapter.mjs
+└── oauth.mjs / oauth-wire.mjs / oauth-grant.mjs（登录任务、PKCE 交换、凭据记录）
+```
+
+Client（浏览器 React，`src/client/*.js`）：`styles → kit → store → login/connection/models/usage → pill → settings → index`。构建按 `scripts/build.mjs` 的依赖序表拼接进单一 `window.__ModuleLoader__.load` 工厂作用域；**模块不写 import**，跨模块用裸标识符，新模块必须登记进顺序表。`remote.mjs` 是 host/client 共享契约，拼接在首位。
+
+依赖单向：组合根 → 编排 → 中间件 → 传输；client 只经 `kiroProvider` RPC 消费 host 投影，不 import 宿主包。
+
+## 职责唯一落位表
+
+| 职责 | 唯一落位 |
+|---|---|
+| 插件配置（mode/region/cliPath/keyRef/disabledModels/modelDefaults/statePath） | Config Editor + `index.mjs` Config，volatile 原地更新 |
+| 派生快照持久化（目录/额度，零凭据） | `store.mjs` → `<statePath 或 storages/dsh-kiro-provider>/state.json` |
+| 拉取/读取分离、TTL、退避、SWR | `resource.mjs`（catalog 5min / usage 60s） |
+| 模型目录解析与校验 | `catalog.mjs`（CLI JSON）+ `direct-http.mjs`（直连分页） |
+| 额度解析与校验 | `usage.mjs`（GetUsageLimits / Get-Usage-Limits 投影） |
+| 凭据 | DSH credentials：API Key/会话按引用解析；OAuth 归 `oauth-grant.mjs` 记录 |
+| RPC 契约（op 与响应校验） | `remote.mjs`（双端共用） |
+| UI 形状原语 | `client/kit.js`；样式令牌唯一来源 `client/styles.js`（`--kiro-*` → `--dsw-alias-*`） |
+| Client 状态 | `client/store.js`（快照 + 分域 busy + 序号票） |
+| 会话输入栏 pill | `client/pill.js`（注入 ModelDirectory 本体：订阅其 store 快照，档位写入走实例 select） |
+
+## 技术范式锁
+
+- 持久化只用 `store.mjs`：lock(wx) + tmp(0o600) + rename 原子写，锁内重读合并，version=1 文档，加载/写入双向校验，损坏即弃。
+- 读路径（`read`/`status`/`listModels`）永不等待上游：内存 → 磁盘 → 空；陈旧由 `revalidate` 后台补采，失败指数退避且保留上次成功快照。写操作只失效缓存，不直接拉取。
+- 设置保存走 Config Editor；凭据走 DSH credentials；状态文件只存派生快照与引用名。
+- UI 全走 `--dsw-alias-*` 宿主令牌 + `.kiro-*` scoped 样式；列表条目一律 kit Row；面板消费快照与动作，RPC 只经 store。
+- 错误只输出本插件撰写的有界文案（`safeProblem`），不回显上游原文、路径或凭据。
+
+## 反模式禁令
+
+- 不新建第二套缓存/持久化/HTTP 客户端；不在 resource 之外私设 TTL 缓存。
+- 不能把凭据、授权码、verifier、上游原始错误写入状态文件、设置响应或日志。
+- 读操作不得触发阻塞式上游拉取；登录轮询不得返回令牌类字段。
+- client 模块不写 import、不 require 宿主 Client 包；样式不写魔法色值。
+- 不读取 IDE、CLI 或 Magpie 的私有令牌文件，不改第三方客户端标识。
+
+## 交接快照
+
+- 已完成：host 模块化拆分、持久化中间件、目录/额度拉取读取分离、modelDefaults、creditRate、RPC 扩展（usage/modelSettings）、client kit 化 UI、上下文 pill、49 项离线测试（含中间件/额度/契约/client store/pill 接线）。独立交叉核验发现的 pill 写路径缺陷（误注入快照 store）已修复并加回归测试。
+- 未端到端验证：桌面设置页亮/暗色与窄屏渲染、pill 运行时行为、真实账号额度接口（协议取自 Magpie 公开参考，离线测试用模拟响应）。验证入口：安装 bundle 后打开设置 → Kiro Provider；pill 需会话选中 kiro-native 模型。
+- 协议参考与设计取舍见 [设计说明](docs/design.md)；公开仓库 github.com/KouzakiUmi/dsh-kiro-provider。

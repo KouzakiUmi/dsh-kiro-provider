@@ -4,6 +4,10 @@ const modes = ['oauth', 'direct', 'session', 'local', 'managed', 'key'];
 const phases = ['idle', 'starting', 'waiting', 'authorizing', 'succeeded', 'cancelled', 'failed'];
 const idPattern = /^[a-z0-9][a-z0-9._:/-]{0,159}$/i;
 const refPattern = /^[A-Za-z_][A-Za-z0-9_]{0,95}$/;
+const effortSet = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+const regions = ['us-east-1', 'eu-central-1'];
+const positive = n => Number.isSafeInteger(n) && n > 0;
+const finite = x => typeof x === 'number' && Number.isFinite(x);
 function record(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 
 export function organizationInput(startUrl, awsRegion) {
@@ -21,7 +25,7 @@ export function organizationInput(startUrl, awsRegion) {
 
 export function parseRequest(value) {
   if (!record(value) || typeof value.op !== 'string') throw new Error('Kiro 设置请求无效。');
-  if (['status', 'detect', 'refresh', 'loginStatus', 'loginCancel', 'logout'].includes(value.op)) return { op: value.op };
+  if (['status', 'detect', 'refresh', 'usage', 'loginStatus', 'loginCancel', 'logout'].includes(value.op)) return { op: value.op };
   if (value.op === 'loginStart') {
     const { method, startUrl, awsRegion } = value;
     if (method === 'builder' || method === 'portal') return { op: value.op, method };
@@ -33,17 +37,54 @@ export function parseRequest(value) {
     const valid = typeof value.keyRef === 'string' && refPattern.test(value.keyRef);
     const direct = value.mode === 'direct';
     const region = value.region;
-    if (direct && !['us-east-1', 'eu-central-1'].includes(region)) throw new Error('Kiro 区域无效。');
+    if (direct && !regions.includes(region)) throw new Error('Kiro 区域无效。');
     if (valid || (!direct && !['session', 'key'].includes(value.mode))) return { op: value.op, mode: value.mode, keyRef: valid ? value.keyRef : 'KIRO_API_KEY', ...(direct ? { region } : {}) };
   }
   if (value.op === 'model' && typeof value.id === 'string' && idPattern.test(value.id) && typeof value.enabled === 'boolean') {
     return { op: value.op, id: value.id, enabled: value.enabled };
+  }
+  if (value.op === 'modelSettings' && typeof value.id === 'string' && idPattern.test(value.id)) {
+    const effort = value.effort ?? '';
+    const maxTokens = value.maxTokens ?? 0;
+    if ((effort === '' || effortSet.has(effort)) && (maxTokens === 0 || (positive(maxTokens) && maxTokens <= 1_000_000))) {
+      return { op: value.op, id: value.id, effort, maxTokens };
+    }
   }
   throw new Error('Kiro 设置请求无效。');
 }
 
 function codec(type, parse) {
   return { mode: 'strict', typeSymbol: `${pluginId}#${type}`, schema: { parse }, create: () => ({ parse }) };
+}
+
+function modelRow(value) {
+  if (!record(value) || typeof value.id !== 'string' || !idPattern.test(value.id) || typeof value.name !== 'string' || typeof value.enabled !== 'boolean') return false;
+  if (value.contextWindow !== undefined && !positive(value.contextWindow)) return false;
+  if (value.maxTokens !== undefined && !positive(value.maxTokens)) return false;
+  if (value.efforts !== undefined && (!Array.isArray(value.efforts) || value.efforts.some(e => !effortSet.has(e)))) return false;
+  if (value.inputModalities !== undefined && (!Array.isArray(value.inputModalities) || value.inputModalities.some(m => m !== 'text' && m !== 'image'))) return false;
+  if (value.creditRate !== undefined && (!finite(value.creditRate) || value.creditRate <= 0)) return false;
+  if (value.maxTokenRange !== undefined && (!record(value.maxTokenRange) || !positive(value.maxTokenRange.min) || !positive(value.maxTokenRange.max) || value.maxTokenRange.min > value.maxTokenRange.max)) return false;
+  return true;
+}
+
+function usageView(value) {
+  if (!record(value) || typeof value.supported !== 'boolean') return false;
+  if (!value.supported) return true;
+  if (value.plan !== undefined && typeof value.plan !== 'string') return false;
+  if (value.user !== undefined && typeof value.user !== 'string') return false;
+  if (value.at !== undefined && value.at !== null && !Number.isSafeInteger(value.at)) return false;
+  if (value.error !== undefined && typeof value.error !== 'string') return false;
+  if (value.windows === undefined) return true;
+  if (!Array.isArray(value.windows) || value.windows.length > 48) return false;
+  return value.windows.every(w => record(w) && ['plan', 'overage', 'bonus', 'trial'].includes(w.kind) && typeof w.name === 'string'
+    && finite(w.used) && w.used >= 0 && finite(w.limit) && w.limit > 0 && finite(w.percent) && w.percent >= 0
+    && ['resetsAt', 'expiresAt'].every(k => w[k] === undefined || typeof w[k] === 'string'));
+}
+
+function defaultsView(value) {
+  return Array.isArray(value) && value.length <= 500 && value.every(d => record(d) && typeof d.id === 'string' && idPattern.test(d.id)
+    && (d.effort === undefined || effortSet.has(d.effort)) && (d.maxTokens === undefined || positive(d.maxTokens)));
 }
 
 export function readSettingsReply(reply, op) {
@@ -74,8 +115,10 @@ export function readSettingsReply(reply, op) {
     if (!Number.isSafeInteger(data.modelCount) || data.modelCount < 0 || !(data.cliVersion === null || typeof data.cliVersion === 'string')) throw malformed();
     return data;
   }
-  if (typeof data.oauthConnected !== 'boolean' || typeof data.keyRef !== 'string' || !['us-east-1', 'eu-central-1'].includes(data.region) || !Array.isArray(data.models)
-    || !data.models.every(model => record(model) && typeof model.id === 'string' && typeof model.name === 'string' && typeof model.enabled === 'boolean')) throw malformed();
+  if (typeof data.oauthConnected !== 'boolean' || typeof data.keyRef !== 'string' || !regions.includes(data.region) || !Array.isArray(data.models) || !data.models.every(modelRow)) throw malformed();
+  if (!(data.catalogAt === null || Number.isSafeInteger(data.catalogAt)) || !['memory', 'disk', 'none'].includes(data.catalogSource)) throw malformed();
+  if (data.modelError !== undefined && typeof data.modelError !== 'string') throw malformed();
+  if (!usageView(data.usage) || !defaultsView(data.modelDefaults)) throw malformed();
   return data;
 }
 

@@ -1,49 +1,40 @@
 import { join } from 'node:path';
 import { profileNames, resolveCli, cliOptions, cliVersion, runKiro, checkRuntimeHome, KiroProblem } from './cli.mjs';
-import { apiKey, discoverDirect, discoverSession, sessionCredential } from './direct-http.mjs';
+import { apiKey, discoverDirect, discoverSession, sessionCredential, usageDirect, usageSession } from './direct-http.mjs';
+import { createCatalog, parseCatalog, validateCatalog, MODEL_ID, effortIds } from './catalog.mjs';
+import { createUsage, parseUsage, validateUsage } from './usage.mjs';
 
 export const ROUTE = 'kiro-native';
 export const directMode = mode => mode === 'direct' || mode === 'session' || mode === 'oauth';
 const CATALOG_ARGS = ['chat', '--v3', '--list-models', '--format', 'json'];
-const VALID_ID = /^[a-z0-9][a-z0-9._:/-]{0,159}$/i;
-const positive = n => Number.isSafeInteger(n) && n > 0;
-const effortIds = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 
-export function parseCatalog(stdout) {
-  let parsed;
-  try { parsed = JSON.parse(stdout); } catch { throw new KiroProblem('Kiro CLI 返回的模型目录不是 JSON。'); }
-  const rows = Array.isArray(parsed) ? parsed : parsed?.models;
-  if (!Array.isArray(rows) || rows.length === 0 || rows.length > 500) throw new KiroProblem('Kiro CLI 没有返回有效模型目录。');
-  const unique = new Set();
-  const models = [];
-  for (const row of rows) {
-    if (!row || typeof row !== 'object') continue;
-    const id = row.id ?? row.modelId ?? row.model_id;
-    if (typeof id !== 'string' || !VALID_ID.test(id) || unique.has(id)) continue;
-    unique.add(id);
-    const label = row.name ?? row.display_name ?? row.displayName;
-    const name = typeof label === 'string' && label.trim() && label.length <= 120 && !/[\x00-\x1f\x7f]/.test(label) ? label.trim() : id;
-    const capacity = row.context_window_tokens ?? row.contextWindowTokens;
-    const declared = row.reasoning_efforts ?? row.reasoningEfforts;
-    const efforts = Array.isArray(declared) ? [...new Set(declared.filter(x => typeof x === 'string' && effortIds.has(x)))] : [];
-    models.push(Object.freeze({ id, name, ...(positive(capacity) ? { contextWindow: capacity } : {}), efforts: Object.freeze(efforts) }));
+export const snapshotValidators = { catalog: validateCatalog, usage: validateUsage };
+
+function normalizeDefaults(rows) {
+  const seen = new Set();
+  const out = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || typeof row.id !== 'string' || !MODEL_ID.test(row.id) || seen.has(row.id)) continue;
+    const effort = effortIds.has(row.effort) ? row.effort : undefined;
+    const maxTokens = Number.isSafeInteger(row.maxTokens) && row.maxTokens > 0 ? row.maxTokens : undefined;
+    if (!effort && !maxTokens) continue;
+    seen.add(row.id);
+    out.push({ id: row.id, ...(effort ? { effort } : {}), ...(maxTokens ? { maxTokens } : {}) });
   }
-  if (!models.length) throw new KiroProblem('Kiro CLI 没有返回可选模型。');
-  return Object.freeze(models);
+  return out;
 }
 
-export function createController({ root, settings, readKey, readOAuth, deps = {} }) {
+export function createController({ root, store, settings, readKey, readOAuth, onUpdate, deps = {} }) {
   const resolve = deps.resolve ?? resolveCli;
   const options = deps.options ?? cliOptions;
   const version = deps.version ?? cliVersion;
   const run = deps.run ?? runKiro;
   const check = deps.check ?? checkRuntimeHome;
   const discover = deps.discoverDirect ?? discoverDirect;
+  const discoverSess = deps.discoverSession ?? discoverSession;
+  const usageKey = deps.usageDirect ?? usageDirect;
+  const usageSess = deps.usageSession ?? usageSession;
   const life = new AbortController();
-  let cache;
-  let discovery;
-  let lastFailure;
-  let epoch = 0;
   const signature = s => JSON.stringify([s.mode, directMode(s.mode) ? s.region : s.cliPath, s.keyRef]);
   const signalFor = signal => signal ? AbortSignal.any([signal, life.signal]) : life.signal;
 
@@ -51,7 +42,7 @@ export function createController({ root, settings, readKey, readOAuth, deps = {}
     const current = settings();
     const mode = current.mode === 'gateway' ? 'direct' : current.mode;
     if (!directMode(mode) && !profileNames.includes(mode)) throw new KiroProblem('Kiro 连接方式无效。');
-    return Object.freeze({ ...current, mode, disabledModels: [...current.disabledModels] });
+    return Object.freeze({ ...current, mode, disabledModels: [...current.disabledModels], modelDefaults: normalizeDefaults(current.modelDefaults) });
   }
 
   const keyFor = async s => apiKey(await readKey(s.keyRef));
@@ -70,60 +61,89 @@ export function createController({ root, settings, readKey, readOAuth, deps = {}
     return { mode: s.mode, binary, process, cli };
   }
 
-  function reset() { ++epoch; cache = undefined; discovery = undefined; lastFailure = undefined; }
-
-  async function load(s, signal) {
-    if (s.mode === 'direct') return { rows: await discover(await keyFor(s), s.region, signalFor(signal)) };
-    if (s.mode === 'session' || s.mode === 'oauth') return { rows: await discoverSession(await sessionFor(s, signal), signalFor(signal)) };
+  async function fetchCatalog(s, signal) {
+    signal = signalFor(signal);
+    if (s.mode === 'direct') return { rows: await discover(await keyFor(s), s.region, signal), cli: null };
+    if (s.mode === 'session' || s.mode === 'oauth') return { rows: await discoverSess(await sessionFor(s, signal), signal), cli: null };
     const selected = await target(s, signal);
-    const answer = await run(selected.binary, CATALOG_ARGS, selected.process, { signal: signalFor(signal) });
+    const answer = await run(selected.binary, CATALOG_ARGS, selected.process, { signal });
     if (answer.failure) throw answer.failure;
     if (answer.code !== 0) throw new KiroProblem('Kiro 模型目录不可用；请核对登录或 API Key 后重试。');
     return { rows: parseCatalog(answer.stdout), cli: selected.cli };
   }
 
-  async function getModels(s, { force = false, signal } = {}) {
-    const key = signature(s);
-    if (signal?.aborted) signal.throwIfAborted();
-    if (!force && cache?.key === key && Date.now() < cache.until) return cache.rows;
-    if (!signal && discovery?.key === key) return discovery.promise;
-    const generation = epoch;
-    const promise = (async () => {
-      const { rows, cli } = await load(s, signal);
-      if (epoch === generation && signature(snapshot()) === key) {
-        cache = { key, rows, cli, until: Date.now() + 300_000 };
-        lastFailure = undefined;
-      }
-      return rows;
-    })();
-    if (!signal) discovery = { key, promise };
-    try { return await promise; }
-    catch (error) {
-      if (!signal?.aborted && !life.signal.aborted && epoch === generation && signature(snapshot()) === key) lastFailure = { key, message: safeProblem(error) };
-      throw error;
-    }
-    finally { if (discovery?.promise === promise) discovery = undefined; }
+  async function fetchUsage(s, signal) {
+    signal = signalFor(signal);
+    const raw = s.mode === 'direct' ? await usageKey(await keyFor(s), s.region, signal) : await usageSess(await sessionFor(s, signal), signal);
+    return parseUsage(raw);
+  }
+
+  const catalog = createCatalog({ store, keyOf: signature, fetch: fetchCatalog, onUpdate });
+  const usage = createUsage({ store, keyOf: signature, fetch: fetchUsage });
+  const ready = store.load().catch(() => {});
+
+  // Read paths never touch the upstream; they serve memory, then the persisted snapshot.
+  function read(s) {
+    const view = catalog.read(s);
+    return { rows: view.value?.rows ?? [], cli: view.value?.cli ?? null, at: view.at ?? null, source: view.source, stale: view.stale, ...(view.error ? { error: view.error } : {}) };
+  }
+
+  function usageRead(s) {
+    if (!directMode(s.mode)) return { supported: false };
+    const view = usage.read(s);
+    return { supported: true, ...(view.value ?? {}), at: view.at ?? null, ...(view.error ? { error: view.error } : {}) };
   }
 
   function status(s) {
-    const current = cache?.key === signature(s) ? cache : undefined;
-    return { mode: s.mode, cliVersion: current?.cli ?? null, cliConfigured: Boolean(s.cliPath), keyRef: s.keyRef,
-      region: s.region,
-      ...(lastFailure?.key === signature(s) ? { modelError: lastFailure.message } : {}),
+    const current = read(s);
+    return { mode: s.mode, cliVersion: current.cli, cliConfigured: Boolean(s.cliPath), keyRef: s.keyRef, region: s.region,
       ...(s.mode === 'managed' ? { loginHome: join(root, 'managed', 'kiro-home') } : {}),
-      models: (current?.rows ?? []).map(row => ({ ...row, enabled: !s.disabledModels.includes(row.id) })) };
+      models: current.rows.map(row => ({ ...row, enabled: !s.disabledModels.includes(row.id) })),
+      catalogAt: current.at, catalogSource: current.source, ...(current.error ? { modelError: current.error } : {}),
+      usage: usageRead(s), modelDefaults: s.modelDefaults };
+  }
+
+  async function refresh(s, { force = false, signal } = {}) {
+    await ready;
+    const value = await catalog.refresh(s, { force, signal });
+    if (directMode(s.mode)) await usage.refresh(s, { force, signal }).catch(() => {});
+    return value;
+  }
+
+  async function refreshUsage(s, { force = false, signal } = {}) {
+    await ready;
+    if (!directMode(s.mode)) throw new KiroProblem('当前连接方式不支持读取 Kiro 额度；请在 Kiro 账户页查看。', 'UNSUPPORTED_OPTION');
+    return usage.refresh(s, { force, signal });
+  }
+
+  function revalidate(s) {
+    void ready.then(() => {
+      catalog.revalidate(s);
+      if (directMode(s.mode)) usage.revalidate(s);
+    });
+  }
+
+  // Model calls use the persisted rows when present; only a cold start waits for a fetch.
+  async function ensure(s, signal) {
+    await ready;
+    const current = read(s);
+    if (current.rows.length) return current.rows;
+    return (await catalog.refresh(s, { signal: signalFor(signal) })).rows;
   }
 
   async function detect(s, signal) {
-    const models = await getModels(s, { force: true, signal });
-    return { cliVersion: status(s).cliVersion, modelCount: models.length,
-      mode: s.mode };
+    await ready;
+    const value = await catalog.refresh(s, { force: true, signal: signalFor(signal) });
+    return { cliVersion: value.cli, modelCount: value.rows.length, mode: s.mode };
   }
 
-  return { snapshot, target, getModels, status, detect, keyFor, sessionFor, reset, signalFor, dispose: () => life.abort() };
-}
+  function reset() {
+    catalog.reset();
+    usage.reset();
+    const key = signature(snapshot());
+    store.invalidate('catalog', key);
+    store.invalidate('usage', key);
+  }
 
-export function safeProblem(error) {
-  if (error instanceof KiroProblem) return error.message;
-  return '无法完成 Kiro 设置操作；请检查连接配置后重试。';
+  return { ready, snapshot, target, read, status, refresh, refreshUsage, revalidate, ensure, detect, keyFor, sessionFor, reset, signalFor, dispose: () => life.abort() };
 }

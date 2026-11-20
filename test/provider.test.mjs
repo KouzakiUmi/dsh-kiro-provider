@@ -8,7 +8,9 @@ import test from 'node:test';
 import { AcpConnection } from '../src/acp.mjs';
 import { generate, promptOf } from '../src/adapter.mjs';
 import { AGENT_ID, cliOptions, checkRuntimeHome, classifyCliFailure } from '../src/cli.mjs';
-import { createController, parseCatalog } from '../src/controller.mjs';
+import { createController, snapshotValidators } from '../src/controller.mjs';
+import { parseCatalog } from '../src/catalog.mjs';
+import { createStore } from '../src/store.mjs';
 import { parseRequest } from '../src/remote.mjs';
 
 const msg = (text, role = 'user') => ({ role, content: [{type:'text', text}] });
@@ -44,25 +46,58 @@ test('setup separates Kiro homes, filters host secrets, and rejects edited polic
   await assert.rejects(cliOptions(root, 'key', 'ksk_fixture_only', source), /配置已更改/);
 });
 
-test('discovery caches a single account/mode and prevents settings from receiving keys', async () => {
-  let current = { mode:'local', cliPath:'', keyRef:'KIRO_API_KEY', disabledModels:[] };
+test('catalog reads never fetch; refresh deduplicates, isolates connections and persists', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-kiro-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, 'state.json');
+  const open = () => createStore({ file, validate: (kind, value) => snapshotValidators[kind]?.(value) });
+  let current = { mode: 'local', cliPath: '', keyRef: 'KIRO_API_KEY', disabledModels: [], modelDefaults: [] };
   let probes = 0;
-  const c = createController({root:'/fixture', settings:()=>current, readKey: async () => 'ksk_fixture_only', deps: {
-    resolve: async () => 'fake-binary', options: async (_root, _mode, key) => ({env: {KIRO_API_KEY:key}}), check:async()=>{}, version:async()=> '3.5.0',
+  const deps = {
+    resolve: async () => 'fake-binary', options: async (_root, _mode, key) => ({ env: { KIRO_API_KEY: key } }), check: async () => {}, version: async () => '3.5.0',
     run: async (_exe, args, opt) => {
-      assert.deepEqual(args, ['chat','--v3','--list-models','--format','json']);
+      assert.deepEqual(args, ['chat', '--v3', '--list-models', '--format', 'json']);
       probes++;
-      return {code:0,stdout:JSON.stringify([{id:opt.env.KIRO_API_KEY ? 'key-model':'local-model'}])};
+      return { code: 0, stdout: JSON.stringify([{ id: opt.env.KIRO_API_KEY ? 'key-model' : 'local-model' }]) };
     },
-  }});
-  const rows = await Promise.all([c.getModels(c.snapshot()), c.getModels(c.snapshot())]);
-  assert.equal(probes,1);
-  assert.equal(rows[0][0].id,'local-model');
-  current = {...current, mode:'key'};
-  assert.deepEqual(c.status(c.snapshot()).models, []);
-  const result = await c.getModels(c.snapshot());
-  assert.equal(result[0].id,'key-model');
+  };
+  const c = createController({ root, store: open(), settings: () => current, readKey: async () => 'ksk_fixture_only', deps });
+  await c.ready;
+  assert.deepEqual(c.read(c.snapshot()).rows, []);
+  assert.equal(probes, 0);
+  const [first, second] = await Promise.all([c.refresh(c.snapshot()), c.refresh(c.snapshot())]);
+  assert.equal(probes, 1);
+  assert.equal(first.rows[0].id, 'local-model');
+  assert.equal(second.rows[0].id, 'local-model');
+  assert.equal(c.read(c.snapshot()).rows[0].id, 'local-model');
+  assert.equal(probes, 1);
+  current = { ...current, mode: 'key' };
+  assert.deepEqual(c.read(c.snapshot()).rows, []);
+  const keyed = await c.refresh(c.snapshot());
+  assert.equal(keyed.rows[0].id, 'key-model');
+  assert.equal(probes, 2);
   assert.doesNotMatch(JSON.stringify(c.status(c.snapshot())), /ksk_fixture_only/);
+  // A fresh controller over the same file serves the persisted catalog without any upstream call.
+  const reopened = createController({ root, store: open(), settings: () => current, readKey: async () => 'ksk_fixture_only',
+    deps: { run: async () => { probes++; return { code: 0, stdout: '[]' }; } } });
+  await reopened.ready;
+  const restored = reopened.read(reopened.snapshot());
+  assert.equal(restored.rows[0].id, 'key-model');
+  assert.equal(restored.source, 'disk');
+  assert.equal(reopened.status(reopened.snapshot()).catalogSource, 'memory');
+  assert.equal(probes, 2);
+  c.dispose();
+  reopened.dispose();
+});
+
+test('model defaults normalize and apply only to unset options', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-kiro-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = createStore({ file: join(root, 'state.json'), validate: (kind, value) => snapshotValidators[kind]?.(value) });
+  const current = { mode: 'local', cliPath: '', keyRef: 'KIRO_API_KEY', disabledModels: [],
+    modelDefaults: [{ id: 'm', effort: 'max', maxTokens: 4096 }, { id: 'm', effort: 'low' }, { id: 'bad id', effort: 'max' }, { id: 'n', effort: 'unknown', maxTokens: 0 }] };
+  const c = createController({ root, store, settings: () => current, readKey: async () => undefined });
+  assert.deepEqual(c.snapshot().modelDefaults, [{ id: 'm', effort: 'max', maxTokens: 4096 }]);
   c.dispose();
 });
 

@@ -22,11 +22,16 @@
 | Kiro CLI 独立登录 | 在终端将 `KIRO_HOME` 指到设置页显示的目录，再运行 `kiro-cli login`。进入官方界面选择 Builder ID、Google、GitHub、IAM Identity Center 或组织身份提供商。 | ACP V3 文本与思考增量 |
 | Kiro API Key（CLI） | 在 DSH 凭据中保存 Key，只把引用名填入设置，默认 `KIRO_API_KEY`。Key 通过子进程环境传给官方无交互模式。 | 完成后返回文本 |
 
-点击 **刷新模型**，按需启停模型，再从 DSH 的 **Kiro Provider** 分组选择。额度在 Kiro 账户页查看。
+点击 **刷新模型**，按需启停模型，再从 DSH 的 **Kiro Provider** 分组选择。模型目录与额度保存在本地快照中：重启后设置页立即显示上次结果，陈旧数据在后台自动补采，刷新失败保留上次成功目录并给出提示。
+
+**额度面板**：直连三种模式（浏览器登录、API Key、会话凭据）显示套餐名与 credits 窗口——月度额度、超额上限（启用 overage 时）、赠送额度与免费试用，含重置时间；点击 **刷新额度** 立即更新。CLI 连接模式的额度在 Kiro 账户页查看。模型行显示 Kiro 公布的 credit 倍率（如 `1.3× credits`）。
+
+**每模型默认设置**：模型行的「默认设置」可保存默认思考档位与输出上限（直连模式），调用时只填充未显式指定的参数。会话输入栏的上下文 pill 显示所选 Kiro 模型的上下文窗口，并可一键切换本会话的思考档位。
 
 ## 当前范围
 
-- 直连模式通过 Kiro 的客户端接口读取账号模型目录、发送对话和解码 AWS 事件流。客户端接口变动可能影响接入。直连不会回落到其他客户端或修改客户端标识。
+- 直连模式通过 Kiro 的客户端接口读取账号模型目录、额度、发送对话和解码 AWS 事件流。客户端接口变动可能影响接入。直连不会回落到其他客户端或修改客户端标识。
+- 本地快照（`storages/dsh-kiro-provider/state.json`，可用配置 `statePath` 改位置）只存模型目录与额度等派生数据，不含凭据；设置保存在插件配置，凭据保存在 DSH 凭据。
 - 手动会话凭据为 JSON 字符串：`accessToken`（访问令牌）、`profileArn`（Kiro 账号资料 ARN）、`expiresAt`（Unix 毫秒时间戳）、`method`（`social` 或 `sso`）。仅在 DSH 凭据中填写。手动会话过期后须更新凭据。
 - CLI 三种模式需要 Kiro CLI `3.5+`，每轮使用新 Kiro 会话、传入 DSH 文本转录，不支持新的 DSH 工具调用、图片、原生会话续接或可配置的输出上限。
 - CLI 模式使用不含 Hooks 和全局 MCP 的 Kiro 登录配置，并关闭 Kiro Web 的 **Apply your cloud configuration to local sessions**。Kiro CLI 管理会话、日志和浏览器登录。独立登录在插件目录下保存 Kiro 状态。

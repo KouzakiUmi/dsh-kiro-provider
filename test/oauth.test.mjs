@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Context } from '@deepseek-ai/cordis';
 import { LlmRuntime } from '@deepseek-ai/dsh-llm';
 import { createOAuth } from '../lib/oauth.mjs';
@@ -155,6 +158,11 @@ test('DSH settings login binds the grant, loads the Kiro catalog, and disconnect
     upstream.push(url.host);
     if (url.pathname === '/client/register') return Response.json({ clientId: 'fixture-id', clientSecret: 'fixture-secret' });
     if (url.pathname === '/token') return Response.json(fakeToken);
+    if (url.pathname === '/Get-Usage-Limits') {
+      assert.equal(init.headers.authorization, `Bearer ${fakeToken.accessToken}`);
+      assert.equal(url.searchParams.get('resourceType'), 'CREDIT');
+      return Response.json({ subscriptionInfo: { subscriptionTitle: 'KIRO PRO' }, usageBreakdownList: [{ displayNamePlural: 'Credits', currentUsageWithPrecision: 1, usageLimitWithPrecision: 100 }] });
+    }
     assert.equal(url.pathname, '/List-Available-Models');
     assert.equal(init.headers.authorization, `Bearer ${fakeToken.accessToken}`);
     return Response.json({ models: [{ modelId: 'claude-sonnet-5.5', tokenLimits: { maxInputTokens: 200000, maxOutputTokens: 64000 } }] });
@@ -166,7 +174,9 @@ test('DSH settings login binds the grant, loads the Kiro catalog, and disconnect
     modifyRecord: async (_key, mutate) => { record = await mutate(record) ?? record; return record; },
     deleteRecord: async () => { record = undefined; },
   }); });
-  await root.plugin(plugin, {});
+  const stateDir = await mkdtemp(join(tmpdir(), 'dsh-kiro-oauth-'));
+  t.after(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  await root.plugin(plugin, { statePath: join(stateDir, 'state.json') });
   const remote = root.get('kiroProvider');
   const invoke = async request => readSettingsReply({ ok: true, value: await remote.invoke(request) }, request.op);
   assert.equal((await invoke({ op: 'status' })).oauthConnected, false);
@@ -177,8 +187,10 @@ test('DSH settings login binds the grant, loads the Kiro catalog, and disconnect
   const refreshed = await invoke({ op: 'refresh' });
   assert.equal(refreshed.oauthConnected, true);
   assert.equal(refreshed.models[0].id, 'claude-sonnet-5.5');
+  assert.equal(refreshed.usage.plan, 'Kiro Pro');
+  assert.equal(refreshed.usage.windows[0].limit, 100);
   assert.doesNotMatch(JSON.stringify(refreshed), /fixture-access|fixture-secret/);
-  assert.deepEqual(upstream, ['oidc.us-east-1.amazonaws.com', 'oidc.us-east-1.amazonaws.com', 'management.us-east-1.kiro.dev']);
+  assert.deepEqual(upstream, ['oidc.us-east-1.amazonaws.com', 'oidc.us-east-1.amazonaws.com', 'management.us-east-1.kiro.dev', 'management.us-east-1.kiro.dev']);
   await invoke({ op: 'logout' });
   assert.equal((await invoke({ op: 'status' })).oauthConnected, false);
   assert.equal((await invoke({ op: 'loginStatus' })).phase, 'idle');

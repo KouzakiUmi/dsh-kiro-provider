@@ -35,9 +35,12 @@ export function directModelCatalog(pages) {
     const limitMax = Math.min(limit?.maximum, maxOutputTokens);
     const maxTokenRange = limit?.type === 'integer' && positive(limit.maximum) && positive(limitMin) && limitMin <= limitMax ? Object.freeze({ min: limitMin, max: limitMax }) : undefined;
     const name = typeof row.modelName === 'string' && row.modelName.trim() && row.modelName.length <= 120 && !/[\x00-\x1f\x7f]/.test(row.modelName) ? row.modelName.trim() : id;
+    // Display only: the credits a request costs as a multiple, when Kiro publishes it in credit units.
+    const creditRate = typeof row.rateMultiplier === 'number' && Number.isFinite(row.rateMultiplier) && row.rateMultiplier > 0
+      && String(row.rateUnit ?? '').toLowerCase() === 'credit' ? row.rateMultiplier : undefined;
     records.set(id, Object.freeze({ id, name, contextWindow: maxInputTokens, maxTokens: maxOutputTokens,
       inputModalities: Object.freeze(entries(row.supportedInputTypes).some(v => /^image$/i.test(v)) ? ['text', 'image'] : ['text']),
-      efforts: Object.freeze(efforts), effortField: routing, adaptive, maxTokenRange,
+      efforts: Object.freeze(efforts), effortField: routing, adaptive, maxTokenRange, ...(creditRate ? { creditRate } : {}),
     }));
   }
   if (!records.size) throw new KiroProblem('Kiro 没有返回包含模型参数的目录。', 'INVALID_CATALOG');
@@ -96,9 +99,9 @@ async function request(fetcher, url, signal, init, timeoutMs, headersOnly = fals
   } finally { if (timer) clearTimeout(timer); }
 }
 
-async function control(fetcher, token, region, operation, body, signal) {
+async function control(fetcher, token, region, operation, body, signal, service = 'KiroControlPlaneBearerService') {
   const response = await request(fetcher, `${host('management', region)}/?origin=KIRO_CLI`, signal, {
-    headers: { ...headers(token), 'content-type': 'application/x-amz-json-1.0', 'x-amz-target': `KiroControlPlaneBearerService.${operation}` },
+    headers: { ...headers(token), 'content-type': 'application/x-amz-json-1.0', 'x-amz-target': `${service}.${operation}` },
     body: JSON.stringify(body),
   }, 12_000);
   if (!response.ok) throw kiroFailure(response.status, await readLimited(response, 16_384));
@@ -136,6 +139,21 @@ async function paginate(nextPage) {
 
 export const discoverDirect = (token, region, signal, fetcher = fetch) => paginate(nextToken => control(fetcher, apiKey(token), region, 'ListAvailableModels', { origin: 'KIRO_CLI', ...(nextToken ? { nextToken } : {}) }, signal));
 export const discoverSession = (auth, signal, fetcher = fetch) => paginate(nextToken => listSession(fetcher, auth, nextToken, signal));
+
+// Usage limits: the API-key control plane names the CodeWhisperer service; sessions use the REST-style GET.
+export const usageDirect = (token, region, signal, fetcher = fetch) => control(fetcher, apiKey(token), region, 'GetUsageLimits', { origin: 'KIRO_CLI' }, signal, 'AmazonCodeWhispererService');
+
+export async function usageSession(auth, signal, fetcher = fetch) {
+  const query = new URLSearchParams({ origin: 'KIRO_CLI', profileArn: auth.profileArn, resourceType: 'CREDIT', isEmailRequired: 'true' });
+  const response = await request(fetcher, `${host('management', auth.region)}/Get-Usage-Limits?${query}`, signal, {
+    method: 'GET', headers: { ...bearerHeaders(auth), accept: 'application/json' },
+  }, 12_000);
+  if (!response.ok) throw kiroFailure(response.status, await readLimited(response, 16_384));
+  try { return JSON.parse(await readLimited(response, 2_000_000)); } catch (error) {
+    if (error instanceof KiroProblem) throw error;
+    throw new KiroProblem('Kiro 额度信息不是有效 JSON。', 'INVALID_RESPONSE');
+  }
+}
 
 export async function openDirectStream({ token, region, wire, signal, fetcher = fetch, auth }) {
   const response = await request(fetcher, `${host('runtime', region)}/generateAssistantResponse`, signal, {

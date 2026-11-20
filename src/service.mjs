@@ -1,0 +1,71 @@
+import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
+import { KiroProblem, safeProblem } from './cli.mjs';
+import { parseRequest } from './remote.mjs';
+
+// Single-descriptor RPC with an op whitelist. Reads short-circuit to the store;
+// writes go through the Config Editor and never carry secrets.
+export function createInvoker({ controller, oauth, grants, edit, modelsChanged, canEdit }) {
+  return async function invoke(value) {
+    try {
+      const r = parseRequest(value);
+      if (r.op === 'loginStart') {
+        grants.checkWritable();
+        if (controller.snapshot().mode !== 'oauth' && !canEdit()) throw new KiroProblem('此 Profile 无法切换到浏览器登录。');
+        return { ok: true, value: await oauth.start(r) };
+      }
+      if (r.op === 'loginStatus') return { ok: true, value: oauth.status() };
+      if (r.op === 'loginCancel') return { ok: true, value: oauth.cancel() };
+      if (r.op === 'logout') {
+        if (oauth.pending()) throw new KiroProblem('请先结束正在进行的 Kiro 登录。');
+        await grants.forget();
+        oauth.clear();
+        modelsChanged();
+        return { ok: true, value: { phase: 'idle' } };
+      }
+      const s = controller.snapshot();
+      if (r.op === 'detect') return { ok: true, value: await controller.detect(s) };
+      if (r.op === 'refresh') await controller.refresh(s, { force: true });
+      if (r.op === 'usage') await controller.refreshUsage(s, { force: true });
+      if (r.op === 'connection') {
+        if (oauth.pending()) throw new KiroProblem('请先结束正在进行的 Kiro 登录。');
+        await edit(current => ({ ...current, mode: r.mode, keyRef: r.keyRef, ...(r.region ? { region: r.region } : {}) }));
+        modelsChanged();
+      }
+      if (r.op === 'model') {
+        if (!(await controller.ensure(s)).some(row => row.id === r.id)) throw new KiroProblem('当前账号没有此 Kiro 模型。');
+        await edit(current => {
+          const disabled = new Set(current.disabledModels ?? []);
+          if (r.enabled) disabled.delete(r.id); else disabled.add(r.id);
+          return { ...current, disabledModels: [...disabled] };
+        });
+      }
+      if (r.op === 'modelSettings') {
+        const row = (await controller.ensure(s)).find(row => row.id === r.id);
+        if (!row) throw new KiroProblem('当前账号没有此 Kiro 模型。');
+        if (r.effort && !row.efforts.includes(r.effort)) throw new KiroProblem('该模型未发布此思考档位。');
+        if (r.maxTokens && (!row.maxTokenRange || r.maxTokens < row.maxTokenRange.min || r.maxTokens > row.maxTokenRange.max)) {
+          throw new KiroProblem('输出长度上限超出该模型公布的范围。');
+        }
+        await edit(current => {
+          const rest = (current.modelDefaults ?? []).filter(d => d?.id !== r.id);
+          const next = { id: r.id, ...(r.effort ? { effort: r.effort } : {}), ...(r.maxTokens ? { maxTokens: r.maxTokens } : {}) };
+          return { ...current, modelDefaults: next.effort || next.maxTokens ? [...rest, next] : rest };
+        });
+      }
+      await controller.ready;
+      // 轻量读顺带触发后台补采（陈旧时），视图本身立即从存储返回，不等待上游。
+      if (r.op === 'status' || r.op === 'connection') controller.revalidate(controller.snapshot());
+      return { ok: true, value: { ...controller.status(controller.snapshot()), oauthConnected: await grants.connected() } };
+    } catch (error) {
+      // Only bounded errors authored by this plugin, never provider output or paths.
+      return { ok: false, error: { message: safeProblem(error) } };
+    }
+  };
+}
+
+export function serviceClass(invoke) {
+  return class KiroService extends TypertRemoteService {
+    constructor(scope) { super(scope, 'kiroProvider'); }
+    invoke(value) { return invoke(value); }
+  };
+}
