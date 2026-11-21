@@ -22,7 +22,20 @@ export function normalizeLogin(value) {
   };
 }
 
-const errorText = (error, fallback) => error instanceof Error && error.message ? error.message : fallback;
+// 鸭子类型取错误文案：跨 realm 的 Error 实例 instanceof 会失效，message 字符串才是可靠信号。
+const errorText = (error, fallback) => error && typeof error.message === 'string' && error.message ? error.message : fallback;
+
+// 写操作的乐观投影：立即反映到视图，失败时回滚到写前快照。
+const WRITE_PROJECT = {
+  connection: (view, r) => ({ ...view, mode: r.mode, keyRef: r.keyRef, ...(r.region ? { region: r.region } : {}) }),
+  model: (view, r) => ({ ...view, models: view.models.map(m => m.id === r.id ? { ...m, enabled: r.enabled } : m) }),
+  modelSettings: (view, r) => ({
+    ...view,
+    modelDefaults: [...view.modelDefaults.filter(d => d.id !== r.id),
+      ...(r.effort || r.maxTokens ? [{ id: r.id, ...(r.effort ? { effort: r.effort } : {}), ...(r.maxTokens ? { maxTokens: r.maxTokens } : {}) }] : [])],
+  }),
+  advanced: (view, r) => ({ ...view, advanced: { quotaRefreshSeconds: r.quotaRefreshSeconds, streamIdleTimeoutMs: r.streamIdleTimeoutMs, maxRequestImageBytes: r.maxRequestImageBytes, autoOpenBrowser: r.autoOpenBrowser } }),
+};
 
 export function createKiroStore(call) {
   let state = {
@@ -49,7 +62,10 @@ export function createKiroStore(call) {
   async function perform(request, scope = 'global') {
     if (disposed || isBusy(scope)) return false;
     const mark = ++viewTicket;
-    publish({ busy: { ...state.busy, [scope]: request.op }, notice: '', alert: '' });
+    const baseView = state.view;
+    const project = WRITE_PROJECT[request.op];
+    const optimistic = project && baseView ? project(baseView, request) : null;
+    publish({ busy: { ...state.busy, [scope]: request.op }, notice: '', alert: '', ...(optimistic ? { view: optimistic } : {}) });
     try {
       const result = await call(request);
       if (disposed || mark !== viewTicket) return false;
@@ -58,17 +74,25 @@ export function createKiroStore(call) {
       } else {
         viewEpoch += 1;
         publish({ view: result });
-        if (request.op === 'connection') publish({ notice: '连接方式已保存，正在后台刷新模型。' });
-        if (request.op === 'modelSettings') publish({ notice: '模型默认设置已保存。' });
+        if (project) publish({ notice: '设置已保存。' });
         if (request.op === 'usage') publish({ notice: '额度已刷新。' });
       }
       return true;
     } catch (error) {
-      if (!disposed && mark === viewTicket) publish({ alert: errorText(error, 'Kiro 设置请求失败，请重试。') });
+      if (!disposed && mark === viewTicket) {
+        publish({
+          alert: errorText(error, 'Kiro 设置请求失败，请重试。'),
+          ...(optimistic && baseView ? { view: baseView, notice: '设置未保存，已恢复原值，请重试。' } : {}),
+        });
+      }
       return false;
     } finally {
       // busy 按域释放，与序号票无关：新操作作废旧响应时不能泄漏旧操作的锁。
-      if (!disposed) release(scope);
+      if (!disposed) {
+        release(scope);
+        // 写操作结算后向 Host 视图对齐：跨域并发下被序号票丢弃的响应由此补正。
+        if (project) void pollRead();
+      }
     }
   }
 
@@ -162,6 +186,7 @@ export function createKiroStore(call) {
     saveConnection: draft => perform({ op: 'connection', ...draft }, 'connection'),
     toggleModel: (id, enabled) => perform({ op: 'model', id, enabled }, `model:${id}`),
     saveModelSettings: (id, effort, maxTokens) => perform({ op: 'modelSettings', id, effort, maxTokens }, `model:${id}`),
+    saveAdvanced: draft => perform({ op: 'advanced', ...draft }, 'advanced'),
     setNotice: notice => publish({ notice }),
     dispose() { disposed = true; listeners.clear(); },
   };

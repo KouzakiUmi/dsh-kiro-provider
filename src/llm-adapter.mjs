@@ -18,7 +18,7 @@ export function adapterFor(controller, ctx) {
   const sdk = anthropicMessagesApi();
   const credentials = new InMemoryCredentialStore();
   function nativeAdapter(s, row, tuning, onFailure) {
-    const profile = directProfile(row, ROUTE, retryPolicy);
+    const profile = directProfile(row, ROUTE, retryPolicy, s.advanced);
     const fetch = directFetch({ row, tuning, onFailure, credential: async signal => {
       if (s.mode === 'direct') return { region: s.region, token: await controller.keyFor(s) };
       const auth = await controller.sessionFor(s, signal);

@@ -24,7 +24,7 @@ export function directFetch({ row, credential, tuning, fetcher, onFailure }) {
   };
 }
 
-export function directProfile(row, route, retryPolicy) {
+export function directProfile(row, route, retryPolicy, tuning = {}) {
   const model = { id: row.id, name: row.name, api: 'anthropic-messages', provider: route, baseUrl: sdkOrigin,
     input: row.inputModalities, output: ['text'], contextWindow: row.contextWindow, maxTokens: row.maxTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, reasoning: row.efforts.length > 0,
@@ -32,5 +32,6 @@ export function directProfile(row, route, retryPolicy) {
     ...(row.efforts.length ? { compat: { forceAdaptiveThinking: true } } : {}),
   };
   return { baseURL: sdkOrigin, provider: route, displayName: 'Kiro Provider', models: [model], modelErrors: new Map(), configuredMaxTokens: new Map(),
-    streamIdleTimeoutMs: 180_000, maxRequestImageBytes: 10_000_000, requestImagePixelBudget: 4_000_000, requestImageMaxBytes: 3_750_000, retryPolicy };
+    streamIdleTimeoutMs: tuning.streamIdleTimeoutMs ?? 180_000, maxRequestImageBytes: tuning.maxRequestImageBytes ?? 10_000_000,
+    requestImagePixelBudget: 4_000_000, requestImageMaxBytes: 3_750_000, retryPolicy };
 }

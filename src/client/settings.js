@@ -1,7 +1,34 @@
-// 设置根组件：持有 store 与生命周期效应，面板只消费快照与动作。
+// 设置根组件：四 tab（概览/模型/连接与登录/高级），持有 store 与生命周期效应。
+const TABS = [
+  { id: 'overview', label: '概览' },
+  { id: 'models', label: '模型' },
+  { id: 'connection', label: '连接与登录' },
+  { id: 'advanced', label: '高级' },
+];
+
+export function tabAfter(key, current) {
+  const index = TABS.findIndex(tab => tab.id === current);
+  if (index < 0) return null;
+  if (key === 'Home') return TABS[0].id;
+  if (key === 'End') return TABS[TABS.length - 1].id;
+  if (key === 'ArrowRight') return TABS[(index + 1) % TABS.length].id;
+  if (key === 'ArrowLeft') return TABS[(index - 1 + TABS.length) % TABS.length].id;
+  return null;
+}
+
+function Overview({ state }) {
+  const { view } = state;
+  return h(Section, { title: '连接状态', summary: MODE_LABELS[view.mode] ?? view.mode },
+    h('div', { className: 'kiro-actions' },
+      h(Chip, { tone: view.oauthConnected ? 'ok' : undefined }, view.oauthConnected ? '已保存浏览器登录' : '未保存浏览器登录'),
+      view.cliVersion ? h(Chip, null, `Kiro CLI ${view.cliVersion}`) : null,
+      h(Chip, null, view.catalogAt ? `目录更新于 ${formatWhen(view.catalogAt)}` : '目录尚未读取')));
+}
+
 export function Settings({ client }) {
   const store = React.useMemo(() => createKiroStore(client.invoke), [client]);
   const state = React.useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  const [tab, setTab] = React.useState('overview');
   const formId = React.useId();
 
   React.useEffect(() => () => store.dispose(), [store]);
@@ -64,14 +91,28 @@ export function Settings({ client }) {
   }
 
   const busyAny = Object.keys(state.busy).length > 0;
+  const onTabKey = event => {
+    const next = tabAfter(event.key, tab);
+    if (!next) return;
+    event.preventDefault();
+    setTab(next);
+    document.getElementById(`${formId}-tab-${next}`)?.focus();
+  };
   return h('section', { className: 'kiro-settings', 'aria-busy': busyAny || undefined, 'aria-labelledby': `${formId}-title` },
     h('h2', { className: 'kiro-title', id: `${formId}-title` }, 'Kiro Provider'),
-    h(LoginPanel, { state, store, formId }),
-    h(ConnectionPanel, { state, store, formId }),
-    state.notice && h(Notice, { kind: 'ok' }, state.notice),
-    state.alert && h(Notice, { kind: 'error' }, state.alert),
-    renderUsage(state, store),
-    renderModels(state, store),
+    h('div', { className: 'kiro-tabs', role: 'tablist', 'aria-label': 'Kiro 设置分区', onKeyDown: onTabKey },
+      TABS.map(item => h('button', {
+        key: item.id, type: 'button', role: 'tab', id: `${formId}-tab-${item.id}`,
+        className: 'kiro-tab', 'aria-selected': tab === item.id, 'aria-controls': `${formId}-panel-${item.id}`,
+        tabIndex: tab === item.id ? 0 : -1, onClick: () => setTab(item.id),
+      }, item.label))),
+    h('div', { className: 'kiro-panel', role: 'tabpanel', id: `${formId}-panel-${tab}`, 'aria-labelledby': `${formId}-tab-${tab}` },
+      state.notice && h(Notice, { kind: 'ok' }, state.notice),
+      state.alert && h(Notice, { kind: 'error' }, state.alert),
+      tab === 'overview' && h(React.Fragment, null, h(Overview, { state }), h(UsagePanel, { state, store })),
+      tab === 'models' && h(ModelsPanel, { state, store }),
+      tab === 'connection' && h(React.Fragment, null, h(LoginPanel, { state, store, formId }), h(ConnectionPanel, { state, store, formId })),
+      tab === 'advanced' && h(AdvancedPanel, { state, store, formId })),
     h('p', { className: 'kiro-footer' },
       h('a', { href: 'https://kiro.dev/docs/cli/', target: '_blank', rel: 'noreferrer' }, 'Kiro CLI 安装与登录说明'), ' · ',
       h('a', { href: 'https://app.kiro.dev/', target: '_blank', rel: 'noreferrer' }, 'Kiro 账户与额度')));

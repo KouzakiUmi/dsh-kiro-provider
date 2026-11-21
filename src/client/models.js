@@ -1,25 +1,43 @@
-// 模型目录面板：列表行 + 启停开关 + credit 倍率徽标 + 每模型默认设置编辑器。
-export function renderModels(state, store) {
+// 模型面板：搜索 + 启用计数 + 默认 6 条折叠 + 每模型默认设置编辑器。
+export const sortModelsByEnabled = models => [...models].sort((a, b) => Number(b.enabled) - Number(a.enabled));
+export const filterModels = (models, query) => {
+  const q = String(query ?? '').trim().toLowerCase();
+  return q ? models.filter(m => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)) : models;
+};
+const PAGE_SIZE = 6;
+
+export function ModelsPanel({ state, store }) {
   const { view, busy } = state;
+  const [query, setQuery] = React.useState('');
+  const [expanded, setExpanded] = React.useState(false);
   const logging = LOGIN_ACTIVE.includes(state.login.phase);
   const canFetch = !logging && (view.mode !== 'oauth' || view.oauthConnected);
   const defaults = new Map(view.modelDefaults.map(row => [row.id, row]));
-  const summary = view.catalogAt
-    ? `更新于 ${formatWhen(view.catalogAt)}${view.catalogSource === 'disk' ? ' · 本地快照' : ''}`
-    : '尚未读取模型';
+  const sorted = sortModelsByEnabled(view.models);
+  const filtered = filterModels(sorted, query);
+  const visible = expanded ? filtered : filtered.slice(0, PAGE_SIZE);
+  const enabledCount = view.models.filter(m => m.enabled).length;
+  const summary = `已启用 ${enabledCount}/${view.models.length} · ${view.catalogAt ? `更新于 ${formatWhen(view.catalogAt)}${view.catalogSource === 'disk' ? ' · 本地快照' : ''}` : '尚未读取模型'}`;
+
   return h(Section, {
     title: '模型目录', summary,
     actions: canFetch ? h(React.Fragment, null,
       button('检测连接', () => void store.detect(), Boolean(busy.catalog)),
       button('刷新模型', () => void store.refresh(), Boolean(busy.catalog), 'primary')) : null,
   },
+    h('input', {
+      className: 'kiro-search', type: 'search', value: query, placeholder: '搜索模型名称或 ID…',
+      'aria-label': '搜索模型', onChange: event => setQuery(event.target.value),
+    }),
     view.modelError && h(Notice, { kind: 'warn' }, view.modelError),
-    view.models.length === 0
-      ? h(EmptyState, { emptyText: '还没有读取到模型。完成登录或保存连接后点击刷新模型。' })
-      : h(ListBox, null, view.models.map(model => h(ModelRow, {
+    filtered.length === 0
+      ? h(EmptyState, { emptyText: query ? '没有匹配的模型。' : '还没有读取到模型。完成登录或保存连接后点击刷新模型。' })
+      : h(ListBox, null, visible.map(model => h(ModelRow, {
         key: model.id, model, defaults: defaults.get(model.id), store,
         busy: Boolean(busy[`model:${model.id}`]) || Boolean(busy.catalog),
-      }))));
+      }))),
+    filtered.length > PAGE_SIZE
+      && button(expanded ? '收起' : `展开全部 ${filtered.length} 个模型`, () => setExpanded(value => !value), false, 'quiet'));
 }
 
 function ModelRow({ model, defaults, busy, store }) {

@@ -26,7 +26,22 @@ ACP 是代理会话接口，不是无状态模型 API；CLI 路径只转发文�
 
 ## 客户端结构
 
-`src/client/` 按依赖序拼接：styles（`--kiro-*` 令牌映射 `--dsw-alias-*`，暗色回退、容器查询、reduced-motion）→ kit（Section/Row/Switch/Notice/Chip/Meter/EmptyState，唯一拼元素形状的层）→ store（快照唯一真源、分域单飞 busy、序号票丢弃过期响应、登录轮询退避、可见性门控 30s 静默读）→ 面板（login/connection/models/usage，草稿本地、任务状态来自快照）→ pill → settings 根组件 → index 入口。构建做 export 形状校验与 `vm.Script` 语法自检；`npm run check` 含 `node --check lib/client.js`。
+`src/client/` 按依赖序拼接：styles（`--kiro-*` 令牌映射 `--dsw-alias-*`，860px 布局、12px 卡片圆角、`color-scheme` 暗色、容器查询、reduced-motion）→ kit（Section/Row/Switch/Notice/Chip/Meter/EmptyState/RelativeDeadline/NumberField，唯一拼元素形状的层）→ store（快照唯一真源、分域单飞 busy、序号票丢弃过期响应、写操作乐观投影与失败回滚、登录轮询退避、可见性门控 30s 静默读）→ 面板（login/connection/models/usage/advanced，草稿本地、任务状态来自快照）→ pill → settings 根组件 → index 入口。构建做 export 形状校验与 `vm.Script` 语法自检；`npm run check` 含 `node --check lib/client.js`。
+
+设置页为四 tab（概览/模型/连接与登录/高级），tab 条支持方向键/Home/End 与 roving tabindex。概览含连接状态 chips 与额度面板；模型面板含名称+ID 搜索、`已启用 n/m` 计数、默认 6 条折叠展开、启用优先排序；高级面板暴露额度刷新间隔、流空闲超时、请求图片上限与登录自动开窗开关，边界真源为 `remote.mjs` 的 `ADVANCED_BOUNDS`（host 归一化与 client 校验共用）。
+
+## opendesign 对齐（行为模式）
+
+参考 `dsh-opendesign-corouter` 0.3.4 的设计，取其行为模式而非文件布局：
+
+- **额度严重度链**：`quotaStatusView` 纯函数，优先级 error > 需登录 > stale > 无窗口 > 最差窗口 percent（≥100 已用尽 / ≥91 即将用尽 / ≥71 偏高 / 其余正常）；aside 窗口（overage 开启时的套餐展示窗）不参与严重度，停止线是 overage 窗口。指标卡按窗口渲染，数字只取 Kiro 响应。
+- **活倒计时**：`RelativeDeadline` 输出 `<time dateTime>`；额度面板对准最近的刷新/重置/到期时刻定时重渲染，隐藏页签暂停、可见时立即补一次。
+- **额度自动刷新**：`usage-scheduler.mjs` 按 `quotaRefreshSeconds`（5–3600，默认 60）定时补采，连续 6 次失败暂停并在 UI 显示，手动刷新成功清零恢复；定时补采复用 resource 的退避，读路径仍不阻塞。
+- **乐观写 + 回滚**：store 对 connection/model/modelSettings/advanced 写操作立即投影到视图，成功以 Host 视图替换并通知「设置已保存。」，失败回滚写前快照并通知「设置未保存，已恢复原值，请重试。」。
+- **登录自动开窗**：本地发起的登录成功后经 `browser-open.mjs` 打开一次默认浏览器（Windows rundll32 / macOS open / Linux xdg-open，均无 shell），URL 白名单与 loginStart 响应校验同构；`autoOpenBrowser` 可关，失败静默、设置页链接仍可点击。不引入 playwright。
+- **固定文案**：client 错误文案鸭子类型取 message（跨 realm 稳健），host 只出 `safeProblem` 有界文案。
+
+不可移植项（协议/产品差异）：temperature/topP（Kiro 直连不支持）、上下文档位覆写与协议选择（Kiro 无此 API）、价格目录（Kiro 为 credit 制，倍率已展示）、模型权益分组（单账号目录）、turn monitor/EOT 恢复（网关专属）。
 
 ## 接入契约
 
@@ -40,7 +55,7 @@ ACP 是代理会话接口，不是无状态模型 API；CLI 路径只转发文�
 
 ## 验收
 
-离线测试 48 项：模拟 CLI/ACP 和 Kiro HTTP/AWS 二进制响应，覆盖请求主机限制、凭据边界、模型发现、帧校验、MCP 工具别名及结果回放、CLI 权限拒绝、取消和 DSH 生命周期；新增持久化原子写/锁竞合/损坏容忍/跨实例合并、拉取读取分离/去重/退避/代际失效、额度投影与校验、RPC 新 op 契约、client store 单飞与过期响应丢弃。测试状态文件一律临时目录隔离。
+离线测试 58 项：模拟 CLI/ACP 和 Kiro HTTP/AWS 二进制响应，覆盖请求主机限制、凭据边界、模型发现、帧校验、MCP 工具别名及结果回放、CLI 权限拒绝、取消和 DSH 生命周期；新增持久化原子写/锁竞合/损坏容忍/跨实例合并、拉取读取分离/去重/退避/代际失效、额度投影与校验、RPC 新 op 契约、client store 单飞/过期响应丢弃/乐观写回滚、pill 接线、调度器暂停与恢复、开窗白名单与平台 opener，以及展开函数组件的渲染冒烟测试（kit 原语与全部面板组件体，捕获 props 简写笔误类运行时错误）。测试状态文件一律临时目录隔离；登录测试关闭自动开窗，不产生真实浏览器副作用。
 
 Alpha 3 的隔离 DSH Host 使用现有的短期会话凭据做真实测试：管理面返回 23 个模型，运行时返回 Claude Sonnet 5.5 的流式文本。两轮工具测试确认发送时使用合法别名，DSH 收到原工具名及参数，回传同一调用 ID 的合成结果后模型返回预期文本。测试期间网络只访问 Kiro 两个 HTTPS 域名，未修改凭据或桌面 Profile。API Key 路径尚未使用真实 Key 测试。
 

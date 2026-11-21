@@ -20,6 +20,7 @@ const view = overrides => ({
   catalogAt: 1700000000000, catalogSource: 'disk',
   usage: { supported: true, plan: 'Kiro Pro', windows: [{ kind: 'plan', name: 'Credits', used: 10, limit: 100, percent: 10 }], at: 1700000000000 },
   modelDefaults: [{ id: 'claude-sonnet-5.5', effort: 'max' }],
+  advanced: { quotaRefreshSeconds: 60, streamIdleTimeoutMs: 180000, maxRequestImageBytes: 10000000, autoOpenBrowser: true },
   ...overrides,
 });
 
@@ -76,6 +77,11 @@ test('request parsing covers usage and per-model settings within bounds', () => 
   assert.throws(() => parseRequest({ op: 'modelSettings', id: 'm', effort: 'ultra' }));
   assert.throws(() => parseRequest({ op: 'modelSettings', id: 'm', maxTokens: 2_000_000 }));
   assert.throws(() => parseRequest({ op: 'modelSettings', id: '--bad' }));
+  assert.deepEqual(parseRequest({ op: 'advanced', autoOpenBrowser: true, quotaRefreshSeconds: 120, streamIdleTimeoutMs: 240000, maxRequestImageBytes: 5000000 }),
+    { op: 'advanced', autoOpenBrowser: true, quotaRefreshSeconds: 120, streamIdleTimeoutMs: 240000, maxRequestImageBytes: 5000000 });
+  assert.throws(() => parseRequest({ op: 'advanced', autoOpenBrowser: true, quotaRefreshSeconds: 1, streamIdleTimeoutMs: 240000, maxRequestImageBytes: 5000000 }));
+  assert.throws(() => parseRequest({ op: 'advanced', quotaRefreshSeconds: 60, streamIdleTimeoutMs: 240000, maxRequestImageBytes: 5000000 }));
+  assert.throws(() => readSettingsReply({ ok: true, value: { ok: true, value: view({ advanced: { quotaRefreshSeconds: 60 } }) } }, 'status'), /设置数据不完整/);
 });
 
 test('alpha.2 gateway configuration migrates to direct mode without contacting a loopback URL', async t => {

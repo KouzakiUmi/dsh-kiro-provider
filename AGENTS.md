@@ -15,11 +15,13 @@ index.mjs（组合根：Config + apply + 生命周期）
 │   ├── catalog.mjs + usage.mjs（两类资源：解析、校验、TTL 配置）
 │   │   └── resource.mjs（拉取/读取分离中间件：read/refresh/revalidate/reset）
 │   │       └── store.mjs（持久化中间件：原子写、锁、指纹键、失效）
+│   ├── usage-scheduler.mjs（额度定时补采：6 次失败暂停，手动刷新恢复）
 │   └── 传输层：cli.mjs / direct-http.mjs / direct-wire.mjs / direct-stream.mjs / direct.mjs / acp.mjs / adapter.mjs
+├── browser-open.mjs（登录自动开窗：URL 白名单 + 平台 opener，无 shell）
 └── oauth.mjs / oauth-wire.mjs / oauth-grant.mjs（登录任务、PKCE 交换、凭据记录）
 ```
 
-Client（浏览器 React，`src/client/*.js`）：`styles → kit → store → login/connection/models/usage → pill → settings → index`。构建按 `scripts/build.mjs` 的依赖序表拼接进单一 `window.__ModuleLoader__.load` 工厂作用域；**模块不写 import**，跨模块用裸标识符，新模块必须登记进顺序表。`remote.mjs` 是 host/client 共享契约，拼接在首位。
+Client（浏览器 React，`src/client/*.js`）：`styles → kit → store → login/connection/models/usage/advanced → pill → settings → index`。构建按 `scripts/build.mjs` 的依赖序表拼接进单一 `window.__ModuleLoader__.load` 工厂作用域；**模块不写 import**，跨模块用裸标识符，新模块必须登记进顺序表。`remote.mjs` 是 host/client 共享契约（含 ADVANCED_BOUNDS 边界真源），拼接在首位。
 
 依赖单向：组合根 → 编排 → 中间件 → 传输；client 只经 `kiroProvider` RPC 消费 host 投影，不 import 宿主包。
 
@@ -30,12 +32,17 @@ Client（浏览器 React，`src/client/*.js`）：`styles → kit → store → 
 | 插件配置（mode/region/cliPath/keyRef/disabledModels/modelDefaults/statePath） | Config Editor + `index.mjs` Config，volatile 原地更新 |
 | 派生快照持久化（目录/额度，零凭据） | `store.mjs` → `<statePath 或 storages/dsh-kiro-provider>/state.json` |
 | 拉取/读取分离、TTL、退避、SWR | `resource.mjs`（catalog 5min / usage 60s） |
+| 额度定时补采与暂停 | `usage-scheduler.mjs`（间隔 quotaRefreshSeconds，6 次失败暂停） |
+| 登录自动开窗 | `browser-open.mjs`（白名单校验，autoOpenBrowser 开关） |
+| 高级设置边界 | `remote.mjs` ADVANCED_BOUNDS（host 归一化与 client 校验共用） |
 | 模型目录解析与校验 | `catalog.mjs`（CLI JSON）+ `direct-http.mjs`（直连分页） |
 | 额度解析与校验 | `usage.mjs`（GetUsageLimits / Get-Usage-Limits 投影） |
 | 凭据 | DSH credentials：API Key/会话按引用解析；OAuth 归 `oauth-grant.mjs` 记录 |
 | RPC 契约（op 与响应校验） | `remote.mjs`（双端共用） |
 | UI 形状原语 | `client/kit.js`；样式令牌唯一来源 `client/styles.js`（`--kiro-*` → `--dsw-alias-*`） |
-| Client 状态 | `client/store.js`（快照 + 分域 busy + 序号票） |
+| Client 状态 | `client/store.js`（快照 + 分域 busy + 序号票 + 写操作乐观投影/失败回滚） |
+| 设置页布局 | `client/settings.js` 四 tab（概览/模型/连接与登录/高级）+ 键盘导航 |
+| 额度视图投影 | `client/usage.js` quotaStatusView 纯函数（error>需登录>stale>空>最差窗口） |
 | 会话输入栏 pill | `client/pill.js`（注入 ModelDirectory 本体：订阅其 store 快照，档位写入走实例 select） |
 
 ## 技术范式锁
@@ -43,7 +50,7 @@ Client（浏览器 React，`src/client/*.js`）：`styles → kit → store → 
 - 持久化只用 `store.mjs`：lock(wx) + tmp(0o600) + rename 原子写，锁内重读合并，version=1 文档，加载/写入双向校验，损坏即弃。
 - 读路径（`read`/`status`/`listModels`）永不等待上游：内存 → 磁盘 → 空；陈旧由 `revalidate` 后台补采，失败指数退避且保留上次成功快照。写操作只失效缓存，不直接拉取。
 - 设置保存走 Config Editor；凭据走 DSH credentials；状态文件只存派生快照与引用名。
-- UI 全走 `--dsw-alias-*` 宿主令牌 + `.kiro-*` scoped 样式；列表条目一律 kit Row；面板消费快照与动作，RPC 只经 store。
+- UI 全走 `--dsw-alias-*` 宿主令牌 + `.kiro-*` scoped 样式（860px、12px 卡片圆角、color-scheme 暗色）；列表条目一律 kit Row；面板消费快照与动作，RPC 只经 store；写操作乐观投影、失败回滚原值并统一通知。
 - 错误只输出本插件撰写的有界文案（`safeProblem`），不回显上游原文、路径或凭据。
 
 ## 反模式禁令
@@ -56,6 +63,6 @@ Client（浏览器 React，`src/client/*.js`）：`styles → kit → store → 
 
 ## 交接快照
 
-- 已完成：host 模块化拆分、持久化中间件、目录/额度拉取读取分离、modelDefaults、creditRate、RPC 扩展（usage/modelSettings）、client kit 化 UI、上下文 pill、49 项离线测试（含中间件/额度/契约/client store/pill 接线）。独立交叉核验发现的 pill 写路径缺陷（误注入快照 store）已修复并加回归测试。
+- 已完成：host 模块化拆分、持久化中间件、目录/额度拉取读取分离、modelDefaults、creditRate、RPC 扩展（usage/modelSettings/advanced）、client kit 化 UI、上下文 pill、58 项离线测试（含中间件/额度/契约/client store/pill 接线/组件渲染冒烟/调度器/开窗白名单）。opendesign 对齐（A–H+I）：四 tab 布局、额度指标卡+严重度链+活倒计时、自动刷新暂停、模型搜索/计数/折叠、乐观写回滚、高级 tab、登录自动开窗（可关）。独立交叉核验发现的 pill 写路径缺陷与 Switch props 笔误均已修复并加回归测试。
 - 未端到端验证：桌面设置页亮/暗色与窄屏渲染、pill 运行时行为、真实账号额度接口（协议取自 Magpie 公开参考，离线测试用模拟响应）。验证入口：安装 bundle 后打开设置 → Kiro Provider；pill 需会话选中 kiro-native 模型。
 - 协议参考与设计取舍见 [设计说明](docs/design.md)；公开仓库 github.com/KouzakiUmi/dsh-kiro-provider。

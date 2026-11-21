@@ -13,7 +13,7 @@ export const ListBox = ({ children }) => h('div', { className: 'kiro-list' }, ch
 
 export const Switch = ({ checked, disabled, label, onChange }) => h('button', {
   type: 'button', className: 'kiro-switch', role: 'switch', disabled,
-  'aria-checked': checked, 'aria-label': label, onClick,
+  'aria-checked': checked, 'aria-label': label, onClick: onChange,
 }, h('span', { className: 'kiro-switch-knob', 'aria-hidden': 'true' }));
 
 // 列表行：主体（名称 + 徽标 + 副行）| 开关 | 展开明细。
@@ -44,6 +44,27 @@ export const Meter = ({ percent, label }) => h('div', {
   className: 'kiro-meter', role: 'progressbar', 'aria-label': label,
   'aria-valuenow': Math.round(Math.min(100, percent)), 'aria-valuemin': 0, 'aria-valuemax': 100,
 }, h('span', { className: 'kiro-meter-fill', 'data-high': percent >= 90 || undefined, 'data-full': percent >= 100 || undefined, style: { width: `${Math.min(100, Math.max(0, percent))}%` } }));
+
+// 活倒计时语义元素：父级提供时钟 now，到点重渲染由面板负责。
+export const RelativeDeadline = ({ at, prefix, now = Date.now() }) => {
+  if (!Number.isFinite(at)) return null;
+  const text = `${prefix ?? ''}${formatWhen(at, now)}`;
+  return h('time', { dateTime: new Date(at).toISOString(), title: new Date(at).toLocaleString(), 'aria-label': text }, text);
+};
+
+// 数值字段：整数 + 区间校验，错误就地提示（失焦保留草稿，由保存按钮提交）。
+export function NumberField({ id, label, value, min, max, disabled, onChange }) {
+  const numeric = Number(value);
+  const invalid = String(value).trim() !== '' && (!Number.isSafeInteger(numeric) || numeric < min || numeric > max);
+  return h('label', { className: 'kiro-field', htmlFor: id }, label,
+    h('input', { id, className: 'kiro-input', type: 'number', inputMode: 'numeric', value, min, max, disabled, onChange: event => onChange(event.target.value) }),
+    invalid && h('span', { className: 'kiro-field-error', role: 'alert' }, `须为 ${min}–${max} 的整数`));
+}
+
+export const numberFieldInvalid = (value, min, max) => {
+  const numeric = Number(value);
+  return String(value).trim() === '' || !Number.isSafeInteger(numeric) || numeric < min || numeric > max;
+};
 
 export const button = (label, onClick, disabled, kind) => h('button', {
   type: 'button', className: `kiro-button${kind ? ` is-${kind}` : ''}`, disabled, onClick,

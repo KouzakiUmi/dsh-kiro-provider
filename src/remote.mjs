@@ -10,6 +10,23 @@ const positive = n => Number.isSafeInteger(n) && n > 0;
 const finite = x => typeof x === 'number' && Number.isFinite(x);
 function record(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 
+// 高级设置边界：host 归一化与 client 校验共用同一真源。
+export const ADVANCED_BOUNDS = {
+  quotaRefreshSeconds: { min: 5, max: 3600, fallback: 60 },
+  streamIdleTimeoutMs: { min: 1000, max: 1_800_000, fallback: 180_000 },
+  maxRequestImageBytes: { min: 1_000_000, max: 50_000_000, fallback: 10_000_000 },
+};
+
+export function normalizeAdvanced(value) {
+  const out = {};
+  for (const [key, bounds] of Object.entries(ADVANCED_BOUNDS)) {
+    const raw = record(value) ? value[key] : undefined;
+    out[key] = Number.isSafeInteger(raw) && raw >= bounds.min && raw <= bounds.max ? raw : bounds.fallback;
+  }
+  out.autoOpenBrowser = !(record(value) && value.autoOpenBrowser === false);
+  return out;
+}
+
 export function organizationInput(startUrl, awsRegion) {
   const region = typeof awsRegion === 'string' ? awsRegion.trim() : '';
   const invalid = '请输入组织提供的 AWS HTTPS Start URL 和商业区 Region，例如 us-east-1。';
@@ -50,6 +67,12 @@ export function parseRequest(value) {
       return { op: value.op, id: value.id, effort, maxTokens };
     }
   }
+  if (value.op === 'advanced') {
+    const entries = Object.entries(ADVANCED_BOUNDS);
+    if (typeof value.autoOpenBrowser === 'boolean' && entries.every(([key, bounds]) => Number.isSafeInteger(value[key]) && value[key] >= bounds.min && value[key] <= bounds.max)) {
+      return { op: value.op, autoOpenBrowser: value.autoOpenBrowser, ...Object.fromEntries(entries.map(([key]) => [key, value[key]])) };
+    }
+  }
   throw new Error('Kiro 设置请求无效。');
 }
 
@@ -75,11 +98,21 @@ function usageView(value) {
   if (value.user !== undefined && typeof value.user !== 'string') return false;
   if (value.at !== undefined && value.at !== null && !Number.isSafeInteger(value.at)) return false;
   if (value.error !== undefined && typeof value.error !== 'string') return false;
+  if (value.stale !== undefined && typeof value.stale !== 'boolean') return false;
+  if (value.autoRefreshPaused !== undefined && typeof value.autoRefreshPaused !== 'boolean') return false;
+  if (value.nextRefreshAt !== undefined && value.nextRefreshAt !== null && !Number.isSafeInteger(value.nextRefreshAt)) return false;
+  if (value.refreshFailures !== undefined && (!Number.isSafeInteger(value.refreshFailures) || value.refreshFailures < 0)) return false;
   if (value.windows === undefined) return true;
   if (!Array.isArray(value.windows) || value.windows.length > 48) return false;
   return value.windows.every(w => record(w) && ['plan', 'overage', 'bonus', 'trial'].includes(w.kind) && typeof w.name === 'string'
     && finite(w.used) && w.used >= 0 && finite(w.limit) && w.limit > 0 && finite(w.percent) && w.percent >= 0
+    && (w.aside === undefined || typeof w.aside === 'boolean')
     && ['resetsAt', 'expiresAt'].every(k => w[k] === undefined || typeof w[k] === 'string'));
+}
+
+function advancedView(value) {
+  return record(value) && typeof value.autoOpenBrowser === 'boolean' && Object.entries(ADVANCED_BOUNDS).every(([key, bounds]) =>
+    Number.isSafeInteger(value[key]) && value[key] >= bounds.min && value[key] <= bounds.max);
 }
 
 function defaultsView(value) {
@@ -118,7 +151,7 @@ export function readSettingsReply(reply, op) {
   if (typeof data.oauthConnected !== 'boolean' || typeof data.keyRef !== 'string' || !regions.includes(data.region) || !Array.isArray(data.models) || !data.models.every(modelRow)) throw malformed();
   if (!(data.catalogAt === null || Number.isSafeInteger(data.catalogAt)) || !['memory', 'disk', 'none'].includes(data.catalogSource)) throw malformed();
   if (data.modelError !== undefined && typeof data.modelError !== 'string') throw malformed();
-  if (!usageView(data.usage) || !defaultsView(data.modelDefaults)) throw malformed();
+  if (!usageView(data.usage) || !defaultsView(data.modelDefaults) || !advancedView(data.advanced)) throw malformed();
   return data;
 }
 

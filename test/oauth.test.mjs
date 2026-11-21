@@ -176,7 +176,7 @@ test('DSH settings login binds the grant, loads the Kiro catalog, and disconnect
   }); });
   const stateDir = await mkdtemp(join(tmpdir(), 'dsh-kiro-oauth-'));
   t.after(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
-  await root.plugin(plugin, { statePath: join(stateDir, 'state.json') });
+  await root.plugin(plugin, { statePath: join(stateDir, 'state.json'), autoOpenBrowser: false });
   const remote = root.get('kiroProvider');
   const invoke = async request => readSettingsReply({ ok: true, value: await remote.invoke(request) }, request.op);
   assert.equal((await invoke({ op: 'status' })).oauthConnected, false);

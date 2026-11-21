@@ -3,6 +3,8 @@ import { profileNames, resolveCli, cliOptions, cliVersion, runKiro, checkRuntime
 import { apiKey, discoverDirect, discoverSession, sessionCredential, usageDirect, usageSession } from './direct-http.mjs';
 import { createCatalog, parseCatalog, validateCatalog, MODEL_ID, effortIds } from './catalog.mjs';
 import { createUsage, parseUsage, validateUsage } from './usage.mjs';
+import { createUsageScheduler } from './usage-scheduler.mjs';
+import { normalizeAdvanced } from './remote.mjs';
 
 export const ROUTE = 'kiro-native';
 export const directMode = mode => mode === 'direct' || mode === 'session' || mode === 'oauth';
@@ -42,7 +44,7 @@ export function createController({ root, store, settings, readKey, readOAuth, on
     const current = settings();
     const mode = current.mode === 'gateway' ? 'direct' : current.mode;
     if (!directMode(mode) && !profileNames.includes(mode)) throw new KiroProblem('Kiro 连接方式无效。');
-    return Object.freeze({ ...current, mode, disabledModels: [...current.disabledModels], modelDefaults: normalizeDefaults(current.modelDefaults) });
+    return Object.freeze({ ...current, mode, disabledModels: [...current.disabledModels], modelDefaults: normalizeDefaults(current.modelDefaults), advanced: normalizeAdvanced(current) });
   }
 
   const keyFor = async s => apiKey(await readKey(s.keyRef));
@@ -81,6 +83,13 @@ export function createController({ root, store, settings, readKey, readOAuth, on
   const catalog = createCatalog({ store, keyOf: signature, fetch: fetchCatalog, onUpdate });
   const usage = createUsage({ store, keyOf: signature, fetch: fetchUsage });
   const ready = store.load().catch(() => {});
+  const modeOf = () => { const mode = settings().mode; return mode === 'gateway' ? 'direct' : mode; };
+  const scheduler = createUsageScheduler({
+    refresh: () => usage.refresh(snapshot(), {}),
+    intervalSeconds: () => normalizeAdvanced(settings()).quotaRefreshSeconds,
+    enabled: () => directMode(modeOf()),
+  });
+  void ready.then(() => scheduler.schedule());
 
   // Read paths never touch the upstream; they serve memory, then the persisted snapshot.
   function read(s) {
@@ -91,7 +100,7 @@ export function createController({ root, store, settings, readKey, readOAuth, on
   function usageRead(s) {
     if (!directMode(s.mode)) return { supported: false };
     const view = usage.read(s);
-    return { supported: true, ...(view.value ?? {}), at: view.at ?? null, ...(view.error ? { error: view.error } : {}) };
+    return { supported: true, ...(view.value ?? {}), at: view.at ?? null, stale: view.stale, ...(view.error ? { error: view.error } : {}), ...scheduler.state() };
   }
 
   function status(s) {
@@ -100,7 +109,7 @@ export function createController({ root, store, settings, readKey, readOAuth, on
       ...(s.mode === 'managed' ? { loginHome: join(root, 'managed', 'kiro-home') } : {}),
       models: current.rows.map(row => ({ ...row, enabled: !s.disabledModels.includes(row.id) })),
       catalogAt: current.at, catalogSource: current.source, ...(current.error ? { modelError: current.error } : {}),
-      usage: usageRead(s), modelDefaults: s.modelDefaults };
+      usage: usageRead(s), modelDefaults: s.modelDefaults, advanced: s.advanced };
   }
 
   async function refresh(s, { force = false, signal } = {}) {
@@ -113,7 +122,7 @@ export function createController({ root, store, settings, readKey, readOAuth, on
   async function refreshUsage(s, { force = false, signal } = {}) {
     await ready;
     if (!directMode(s.mode)) throw new KiroProblem('当前连接方式不支持读取 Kiro 额度；请在 Kiro 账户页查看。', 'UNSUPPORTED_OPTION');
-    return usage.refresh(s, { force, signal });
+    return scheduler.manual(usage.refresh(s, { force, signal }));
   }
 
   function revalidate(s) {
@@ -143,7 +152,10 @@ export function createController({ root, store, settings, readKey, readOAuth, on
     const key = signature(snapshot());
     store.invalidate('catalog', key);
     store.invalidate('usage', key);
+    scheduler.reset();
   }
 
-  return { ready, snapshot, target, read, status, refresh, refreshUsage, revalidate, ensure, detect, keyFor, sessionFor, reset, signalFor, dispose: () => life.abort() };
+  return { ready, snapshot, target, read, status, refresh, refreshUsage, revalidate, ensure, detect, keyFor, sessionFor, reset, signalFor,
+    reschedule: () => scheduler.schedule(),
+    dispose: () => { scheduler.dispose(); life.abort(); } };
 }
