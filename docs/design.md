@@ -35,7 +35,7 @@ ACP 是代理会话接口，不是无状态模型 API；CLI 路径只转发文�
 `model-name.mjs` 为 host/client 共享纯函数，参考 `dsh-unified-router` 的 DESIGN-STANDARDS §3 与 `lib/model-catalog.js` 模式（自实现，不导入其代码）：
 
 - **可读显示名**：`readableModelName(id, name)` 清理 ID 格式——品牌词表（Claude/GPT/Grok/Kimi/MiniMax/GLM/DeepSeek/Qwen…）、连字符分词、版本连字符转点（`4-5`→`4.5`）、粘连品牌拆分（`qwen3`→`Qwen 3`）。请求 ID 原样保留在模型行副行与 RPC 中；DSH 选择器（`modelInfo`）与设置页共用同一投影。
-- **扣费倍率徽标**：`modelRateBadge(rate)` 输出 `x{倍率}` 标签 + 消耗色调（≤0.5 success / ≤1.5 info / >1.5 warning）；倍率只由徽标表达，不拼进名称。数据来自目录 `rateMultiplier`（`rateUnit=credit`），仅展示。
+- **扣费倍率徽标**：`modelRateBadge(rate)` 输出 `x{倍率}`（两位小数）标签 + 消耗色调（≤0.5 success / ≤1.5 info / >1.5 warning），设置页模型行使用；`selectorRateBadge(rate)` 输出核心原生 `LlmModelInfo.badge`（`{text:{en,zh}, tone:'neutral'}`），由 `listModels` 广告给会话选择器（Core `buildModelCatalog` 读取、`dsh-client-ui-model-selection` 原生渲染：收起态名前、下拉行名后；`resolveModel` 与请求/会话事件不携带——rc.5 类型与渲染源码已核）。倍率只由徽标表达，不拼进名称；未知倍率不挂徽标。数据来自目录 `rateMultiplier`（`rateUnit=credit`），仅展示。
 - **旧版默认关闭**：`legacyModelIds(rows)` 双层判定——已核实外部后继表（SUPERSEDED，2026-11-21 直接访问 Artificial Analysis 排行榜内嵌数据核对 `deprecated` 标志，Kimi 用官方平台文档；逐条证据见 [模型策展](model-curation.md)）+ 目录内「同家族存在更高版本」（家族=去掉尾版本段的 ID，版本连字符先转点；版本段允许单字母前缀如 `m2.5`/`k3`）。变体型号（`gpt-5.6-sol/terra/luna`）不互相压制，但 GPT-5.6 全系经 AA 确认已弃用。真实目录 23 模型中 18 个默认关闭，仅 Auto 与 Claude 5.5 三型、Grok 4.7 默认开启。启停为三态：`disabledModels`（显式关）> `enabledModels`（显式开）> 推荐默认；「恢复推荐」（`recommend` op）清除两数组回到推荐列表。Host 的 `status`/`listModels`/`prepareCall` 与 client 开关共用 `controller.modelEnabled` 语义（legacy 按 rows 引用缓存）。
 
 ## opendesign 对齐（行为模式）

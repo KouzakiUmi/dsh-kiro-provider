@@ -36,7 +36,7 @@ Client（浏览器 React，`src/client/*.js`）：`styles → kit → store → 
 | 登录自动开窗 | `browser-open.mjs`（白名单校验，autoOpenBrowser 开关） |
 | 高级设置边界 | `remote.mjs` ADVANCED_BOUNDS（host 归一化与 client 校验共用） |
 | 模型目录解析与校验 | `catalog.mjs`（CLI JSON）+ `direct-http.mjs`（直连分页） |
-| 显示名/倍率徽标/旧版判定 | `model-name.mjs`（共享纯函数；请求 ID 原样保留，倍率只走徽标不进名称） |
+| 显示名/倍率徽标/旧版判定 | `model-name.mjs`（共享纯函数；请求 ID 原样保留，倍率只走徽标不进名称；选择器徽标走核心 LlmModelInfo.badge，仅 listModels 广告） |
 | 模型三态启停 | `disabledModels`（显式关）> `enabledModels`（显式开）> 推荐默认（旧版关）；`recommend` op 清除手动开关 |
 | 额度解析与校验 | `usage.mjs`（GetUsageLimits / Get-Usage-Limits 投影） |
 | 凭据 | DSH credentials：API Key/会话按引用解析；OAuth 归 `oauth-grant.mjs` 记录 |
@@ -65,6 +65,6 @@ Client（浏览器 React，`src/client/*.js`）：`styles → kit → store → 
 
 ## 交接快照
 
-- 已完成：host 模块化拆分、持久化中间件、目录/额度拉取读取分离、modelDefaults、creditRate、RPC 扩展（usage/modelSettings/advanced/recommend）、client kit 化 UI、上下文 pill、65 项离线测试（含中间件/额度/契约/client store/pill 接线/组件渲染冒烟/调度器/开窗白名单/显示投影/三态启停/service 写路径）。opendesign 对齐（A–H+I）与 Unified Router 对齐（可读显示名、x倍率徽标+消耗色调、旧版默认关闭+恢复推荐）均已落地；旧版判定经 AA 直连数据核实（docs/model-curation.md，23 模型中 18 旧版）。独立交叉核验发现的 pill 写路径缺陷与 Switch props 笔误均已修复并加回归测试。
+- 已完成：host 模块化拆分、持久化中间件、目录/额度拉取读取分离、modelDefaults、creditRate、RPC 扩展（usage/modelSettings/advanced/recommend）、client kit 化 UI、上下文 pill、67 项离线测试（含中间件/额度/契约/client store/pill 接线/组件渲染冒烟/调度器/开窗白名单/显示投影/三态启停/service 写路径/选择器 badge）。opendesign 对齐（A–H+I）与 Unified Router 对齐（可读显示名、x倍率徽标+消耗色调、旧版默认关闭+恢复推荐、选择器原生 badge）均已落地；旧版判定经 AA 直连数据核实（docs/model-curation.md，23 模型中 18 旧版）。独立交叉核验发现的 pill 写路径缺陷与 Switch props 笔误均已修复并加回归测试。
 - 未端到端验证：桌面设置页亮/暗色与窄屏渲染、pill 运行时行为、真实账号额度接口（协议取自 Magpie 公开参考，离线测试用模拟响应）。验证入口：安装 bundle 后打开设置 → Kiro Provider；pill 需会话选中 kiro-native 模型。
 - 协议参考与设计取舍见 [设计说明](docs/design.md)；公开仓库 github.com/KouzakiUmi/dsh-kiro-provider。

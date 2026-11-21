@@ -117,6 +117,28 @@ test('recommended defaults disable legacy versions; explicit overrides win', asy
   c.dispose();
 });
 
+test('listModels advertises readable names and rate badges to the selector', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-kiro-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = createStore({ file: join(root, 'state.json'), validate: (kind, value) => snapshotValidators[kind]?.(value) });
+  const current = { mode: 'local', cliPath: '', keyRef: 'KIRO_API_KEY', disabledModels: [], enabledModels: [], modelDefaults: [] };
+  const catalog = [{ id: 'claude-sonnet-5.5', rate_multiplier: 1.3, rate_unit: 'credit' }, { id: 'auto' }];
+  const c = createController({ root, store, settings: () => current, readKey: async () => undefined, deps: {
+    resolve: async () => 'fake-binary', options: async () => ({ env: {} }), check: async () => {}, version: async () => '3.5.0',
+    run: async () => ({ code: 0, stdout: JSON.stringify(catalog) }),
+  } });
+  const { adapterFor } = await import('../src/llm-adapter.mjs');
+  const adapter = adapterFor(c, { get: () => undefined });
+  await c.ready;
+  await c.refresh(c.snapshot());
+  const models = await adapter.listModels();
+  const sonnet = models.find(m => m.id === 'claude-sonnet-5.5');
+  assert.equal(sonnet.name, 'Claude Sonnet 5.5');
+  assert.deepEqual(sonnet.badge, { text: { en: 'x1.30', zh: 'x1.30' }, tone: 'neutral' });
+  assert.equal(models.find(m => m.id === 'auto').badge, undefined);
+  c.dispose();
+});
+
 test('model defaults normalize and apply only to unset options', async t => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-kiro-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));

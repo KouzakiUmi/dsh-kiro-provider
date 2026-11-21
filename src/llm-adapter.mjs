@@ -6,7 +6,7 @@ import { KiroProblem, safeProblem } from './cli.mjs';
 import { generate } from './adapter.mjs';
 import { directFetch, directProfile } from './direct.mjs';
 import { ROUTE, directMode } from './controller.mjs';
-import { readableModelName } from './model-name.mjs';
+import { readableModelName, selectorRateBadge } from './model-name.mjs';
 
 function modelInfo(row) {
   return { provider: ROUTE, id: row.id, name: readableModelName(row.id, row.name), inputModalities: row.inputModalities ?? ['text'],
@@ -90,7 +90,10 @@ export function adapterFor(controller, ctx) {
       await controller.ready;
       const view = controller.read(s);
       controller.revalidate(s);
-      return view.rows.filter(row => controller.modelEnabled(s, row.id)).map(modelInfo);
+      return view.rows.filter(row => controller.modelEnabled(s, row.id)).map(row => {
+        const badge = selectorRateBadge(row.creditRate);
+        return { ...modelInfo(row), ...(badge ? { badge } : {}) };
+      });
     }
     async resolveModel(provider, id, signal) {
       const s = controller.snapshot();

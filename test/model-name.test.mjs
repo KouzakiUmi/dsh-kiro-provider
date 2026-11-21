@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readableModelName, modelRateBadge, legacyModelIds, supersededBy } from '../src/model-name.mjs';
+import { readableModelName, modelRateBadge, selectorRateBadge, legacyModelIds, supersededBy } from '../src/model-name.mjs';
 
 test('ID 格式显示名清理为可读品牌名，请求 ID 不受影响', () => {
   const cases = [
@@ -17,11 +17,17 @@ test('ID 格式显示名清理为可读品牌名，请求 ID 不受影响', () =
 });
 
 test('倍率徽标格式与消耗色调', () => {
-  assert.deepEqual(modelRateBadge(1.3), { label: 'x1.3', tone: 'info', multiplier: 1.3 });
+  assert.deepEqual(modelRateBadge(1.3), { label: 'x1.30', tone: 'info', multiplier: 1.3 });
   assert.deepEqual(modelRateBadge(0.06), { label: 'x0.06', tone: 'success', multiplier: 0.06 });
-  assert.deepEqual(modelRateBadge(4.4), { label: 'x4.4', tone: 'warning', multiplier: 4.4 });
-  assert.equal(modelRateBadge(2).label, 'x2');
+  assert.deepEqual(modelRateBadge(4.4), { label: 'x4.40', tone: 'warning', multiplier: 4.4 });
+  assert.equal(modelRateBadge(2).label, 'x2.00');
   for (const bad of [0, -1, NaN, null, '1.3']) assert.equal(modelRateBadge(bad), null);
+});
+
+test('选择器徽标走核心 LlmModelInfo.badge 契约，未知不挂', () => {
+  assert.deepEqual(selectorRateBadge(1.3), { text: { en: 'x1.30', zh: 'x1.30' }, tone: 'neutral' });
+  assert.deepEqual(selectorRateBadge(0.06), { text: { en: 'x0.06', zh: 'x0.06' }, tone: 'neutral' });
+  for (const bad of [0, -1, NaN, undefined, null, '1.3']) assert.equal(selectorRateBadge(bad), undefined);
 });
 
 test('旧版判定：已核实外部后继 + 同家族更高版本；变体与现役型号不受影响', () => {

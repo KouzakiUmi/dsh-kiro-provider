@@ -26,10 +26,18 @@ export function readableModelName(id, name) {
   }).join(' ');
 }
 
-// 倍率徽标：x{倍率} + 消耗色调（≤0.5 低耗 / ≤1.5 常规 / >1.5 高耗）。
+// 倍率徽标：x{倍率}（两位小数，与 Unified Router 同格式）+ 消耗色调（≤0.5 低耗 / ≤1.5 常规 / >1.5 高耗）。
 export function modelRateBadge(rate) {
   if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) return null;
-  return { label: `x${Number(rate.toFixed(2))}`, tone: rate <= 0.5 ? 'success' : rate <= 1.5 ? 'info' : 'warning', multiplier: rate };
+  return { label: `x${rate.toFixed(2)}`, tone: rate <= 0.5 ? 'success' : rate <= 1.5 ? 'info' : 'warning', multiplier: rate };
+}
+
+// DSH 核心原生 LlmModelInfo.badge：只经 listModels 广告给会话选择器（收起态名前、下拉行名后），
+// resolveModel 与请求/会话事件不携带。未知倍率不挂徽标，不谎报免费。
+export function selectorRateBadge(rate) {
+  if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) return undefined;
+  const text = `x${rate.toFixed(2)}`;
+  return { text: { en: text, zh: text }, tone: 'neutral' };
 }
 
 const VERSION_SEGMENT = /^[a-z]?(\d+(?:\.\d+)*)$/i;
