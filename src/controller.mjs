@@ -5,6 +5,7 @@ import { createCatalog, parseCatalog, validateCatalog, MODEL_ID, effortIds } fro
 import { createUsage, parseUsage, validateUsage } from './usage.mjs';
 import { createUsageScheduler } from './usage-scheduler.mjs';
 import { normalizeAdvanced } from './remote.mjs';
+import { legacyModelIds } from './model-name.mjs';
 
 export const ROUTE = 'kiro-native';
 export const directMode = mode => mode === 'direct' || mode === 'session' || mode === 'oauth';
@@ -44,7 +45,8 @@ export function createController({ root, store, settings, readKey, readOAuth, on
     const current = settings();
     const mode = current.mode === 'gateway' ? 'direct' : current.mode;
     if (!directMode(mode) && !profileNames.includes(mode)) throw new KiroProblem('Kiro 连接方式无效。');
-    return Object.freeze({ ...current, mode, disabledModels: [...current.disabledModels], modelDefaults: normalizeDefaults(current.modelDefaults), advanced: normalizeAdvanced(current) });
+    return Object.freeze({ ...current, mode, disabledModels: [...current.disabledModels], enabledModels: [...(current.enabledModels ?? [])],
+      modelDefaults: normalizeDefaults(current.modelDefaults), advanced: normalizeAdvanced(current) });
   }
 
   const keyFor = async s => apiKey(await readKey(s.keyRef));
@@ -103,11 +105,26 @@ export function createController({ root, store, settings, readKey, readOAuth, on
     return { supported: true, ...(view.value ?? {}), at: view.at ?? null, stale: view.stale, ...(view.error ? { error: view.error } : {}), ...scheduler.state() };
   }
 
+  // 三态启停：显式关闭 > 显式开启 > 推荐默认（已核实后继 + 同家族更高版本的旧版默认关闭）。
+  // legacy 按 rows 引用缓存，避免逐行调用时重复 O(n²) 判定。
+  let legacyCache = { rows: null, ids: [] };
+  function legacyIds(rows) {
+    if (legacyCache.rows !== rows) legacyCache = { rows, ids: legacyModelIds(rows) };
+    return legacyCache.ids;
+  }
+  function modelEnabled(s, id) {
+    if (s.disabledModels.includes(id)) return false;
+    if (s.enabledModels.includes(id)) return true;
+    return !legacyIds(read(s).rows).includes(id);
+  }
+
   function status(s) {
     const current = read(s);
+    const legacy = new Set(legacyIds(current.rows));
+    const enabled = id => !s.disabledModels.includes(id) && (s.enabledModels.includes(id) || !legacy.has(id));
     return { mode: s.mode, cliVersion: current.cli, cliConfigured: Boolean(s.cliPath), keyRef: s.keyRef, region: s.region,
       ...(s.mode === 'managed' ? { loginHome: join(root, 'managed', 'kiro-home') } : {}),
-      models: current.rows.map(row => ({ ...row, enabled: !s.disabledModels.includes(row.id) })),
+      models: current.rows.map(row => ({ ...row, enabled: enabled(row.id), legacy: legacy.has(row.id) })),
       catalogAt: current.at, catalogSource: current.source, ...(current.error ? { modelError: current.error } : {}),
       usage: usageRead(s), modelDefaults: s.modelDefaults, advanced: s.advanced };
   }
@@ -155,7 +172,7 @@ export function createController({ root, store, settings, readKey, readOAuth, on
     scheduler.reset();
   }
 
-  return { ready, snapshot, target, read, status, refresh, refreshUsage, revalidate, ensure, detect, keyFor, sessionFor, reset, signalFor,
+  return { ready, snapshot, target, read, status, modelEnabled, refresh, refreshUsage, revalidate, ensure, detect, keyFor, sessionFor, reset, signalFor,
     reschedule: () => scheduler.schedule(),
     dispose: () => { scheduler.dispose(); life.abort(); } };
 }

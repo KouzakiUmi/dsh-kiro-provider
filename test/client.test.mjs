@@ -166,7 +166,8 @@ test('kit and panels render without undefined identifiers (expanding stub)', () 
 
   const fullView = view({
     oauthConnected: true,
-    models: [{ id: 'claude-sonnet-5.5', name: 'Claude Sonnet 5.5', enabled: true, efforts: ['low', 'max'], contextWindow: 200000, creditRate: 1.3, maxTokenRange: { min: 1, max: 64000 } }],
+    models: [{ id: 'claude-sonnet-5.5', name: 'Claude Sonnet 5.5', enabled: true, efforts: ['low', 'max'], contextWindow: 200000, creditRate: 1.3, maxTokenRange: { min: 1, max: 64000 } },
+      { id: 'claude-sonnet-4.5', name: 'claude-sonnet-4.5', enabled: false, legacy: true, efforts: [], contextWindow: 200000, creditRate: 1.3 }],
     catalogAt: 1700000000000, catalogSource: 'memory',
     usage: { supported: true, plan: 'Kiro Pro', windows: [{ kind: 'plan', name: 'Credits', used: 10, limit: 100, percent: 10, resetsAt: '2026-01-01T00:00:00.000Z' }], at: 1700000000000, stale: false, autoRefreshPaused: false, nextRefreshAt: 1700000060000, refreshFailures: 0 },
     modelDefaults: [{ id: 'claude-sonnet-5.5', effort: 'max', maxTokens: 4096 }],
@@ -208,11 +209,28 @@ test('model sorting, search and tab keyboard navigation are pure and bounded', (
   assert.deepEqual(filterModels(models, 'gam').map(m => m.id), ['c']);
   assert.deepEqual(filterModels(models, '  ').map(m => m.id), ['a', 'b', 'c']);
   assert.deepEqual(filterModels(models, 'zzz'), []);
+  assert.deepEqual(filterModels([{ id: 'claude-sonnet-5.5', name: 'claude-sonnet-5.5', enabled: true }], 'Claude Sonnet').map(m => m.id), ['claude-sonnet-5.5']);
   assert.equal(tabAfter('ArrowRight', 'overview'), 'models');
   assert.equal(tabAfter('ArrowLeft', 'overview'), 'advanced');
   assert.equal(tabAfter('Home', 'advanced'), 'overview');
   assert.equal(tabAfter('End', 'overview'), 'advanced');
   assert.equal(tabAfter('Enter', 'overview'), null);
+});
+
+test('restore recommended clears overrides and projects legacy models off', async () => {
+  const base = view({ models: [{ id: 'claude-sonnet-4.5', name: 'claude-sonnet-4.5', enabled: true }, { id: 'claude-sonnet-5.5', name: 'claude-sonnet-5.5', enabled: true }] });
+  const calls = [];
+  const store = createKiroStore(async request => {
+    calls.push(request.op);
+    return { ...base, models: [{ id: 'claude-sonnet-4.5', name: 'claude-sonnet-4.5', enabled: false, legacy: true }, { id: 'claude-sonnet-5.5', name: 'claude-sonnet-5.5', enabled: true, legacy: false }] };
+  });
+  await store.load();
+  const write = store.restoreRecommended();
+  assert.equal(store.getSnapshot().view.models.find(m => m.id === 'claude-sonnet-4.5').enabled, false);
+  await write;
+  assert.ok(calls.includes('recommend'));
+  assert.equal(store.getSnapshot().notice, '设置已保存。');
+  store.dispose();
 });
 
 test('cross-scope concurrent writes resync to the host view after settlement', async () => {

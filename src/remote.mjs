@@ -42,7 +42,7 @@ export function organizationInput(startUrl, awsRegion) {
 
 export function parseRequest(value) {
   if (!record(value) || typeof value.op !== 'string') throw new Error('Kiro 设置请求无效。');
-  if (['status', 'detect', 'refresh', 'usage', 'loginStatus', 'loginCancel', 'logout'].includes(value.op)) return { op: value.op };
+  if (['status', 'detect', 'refresh', 'usage', 'recommend', 'loginStatus', 'loginCancel', 'logout'].includes(value.op)) return { op: value.op };
   if (value.op === 'loginStart') {
     const { method, startUrl, awsRegion } = value;
     if (method === 'builder' || method === 'portal') return { op: value.op, method };
@@ -87,6 +87,7 @@ function modelRow(value) {
   if (value.efforts !== undefined && (!Array.isArray(value.efforts) || value.efforts.some(e => !effortSet.has(e)))) return false;
   if (value.inputModalities !== undefined && (!Array.isArray(value.inputModalities) || value.inputModalities.some(m => m !== 'text' && m !== 'image'))) return false;
   if (value.creditRate !== undefined && (!finite(value.creditRate) || value.creditRate <= 0)) return false;
+  if (value.legacy !== undefined && typeof value.legacy !== 'boolean') return false;
   if (value.maxTokenRange !== undefined && (!record(value.maxTokenRange) || !positive(value.maxTokenRange.min) || !positive(value.maxTokenRange.max) || value.maxTokenRange.min > value.maxTokenRange.max)) return false;
   return true;
 }

@@ -30,7 +30,7 @@ export const Row = ({ name, tags, meta, switchControl, moreLabel, expanded, onTo
       : h('button', { type: 'button', className: 'kiro-more', 'aria-expanded': expanded, 'aria-label': `${name} 的更多操作`, onClick: onToggle }, expanded ? '收起' : moreLabel),
     expanded && detail ? h('div', { className: 'kiro-row-detail' }, detail) : null);
 
-export const Chip = ({ tone, children }) => h('span', { className: 'kiro-chip', 'data-tone': tone }, children);
+export const Chip = ({ tone, title, children }) => h('span', { className: 'kiro-chip', 'data-tone': tone, title }, children);
 
 export const Notice = ({ kind, children }) => h('p', { className: 'kiro-notice', 'data-kind': kind, role: kind === 'error' ? 'alert' : 'status' }, children);
 

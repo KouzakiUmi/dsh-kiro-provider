@@ -35,6 +35,10 @@ const WRITE_PROJECT = {
       ...(r.effort || r.maxTokens ? [{ id: r.id, ...(r.effort ? { effort: r.effort } : {}), ...(r.maxTokens ? { maxTokens: r.maxTokens } : {}) }] : [])],
   }),
   advanced: (view, r) => ({ ...view, advanced: { quotaRefreshSeconds: r.quotaRefreshSeconds, streamIdleTimeoutMs: r.streamIdleTimeoutMs, maxRequestImageBytes: r.maxRequestImageBytes, autoOpenBrowser: r.autoOpenBrowser } }),
+  recommend: view => {
+    const legacy = new Set(legacyModelIds(view.models));
+    return { ...view, models: view.models.map(m => ({ ...m, enabled: !legacy.has(m.id) })) };
+  },
 };
 
 export function createKiroStore(call) {
@@ -187,6 +191,7 @@ export function createKiroStore(call) {
     toggleModel: (id, enabled) => perform({ op: 'model', id, enabled }, `model:${id}`),
     saveModelSettings: (id, effort, maxTokens) => perform({ op: 'modelSettings', id, effort, maxTokens }, `model:${id}`),
     saveAdvanced: draft => perform({ op: 'advanced', ...draft }, 'advanced'),
+    restoreRecommended: () => perform({ op: 'recommend' }, 'catalog'),
     setNotice: notice => publish({ notice }),
     dispose() { disposed = true; listeners.clear(); },
   };

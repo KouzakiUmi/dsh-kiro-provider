@@ -44,9 +44,15 @@ export function createInvoker({ controller, oauth, grants, edit, modelsChanged, 
         if (!(await controller.ensure(s)).some(row => row.id === r.id)) throw new KiroProblem('当前账号没有此 Kiro 模型。');
         await edit(current => {
           const disabled = new Set(current.disabledModels ?? []);
-          if (r.enabled) disabled.delete(r.id); else disabled.add(r.id);
-          return { ...current, disabledModels: [...disabled] };
+          const enabled = new Set(current.enabledModels ?? []);
+          if (r.enabled) { disabled.delete(r.id); enabled.add(r.id); }
+          else { enabled.delete(r.id); disabled.add(r.id); }
+          return { ...current, disabledModels: [...disabled], enabledModels: [...enabled] };
         });
+      }
+      if (r.op === 'recommend') {
+        // 恢复推荐：清除全部手动开关，回到「旧版默认关闭」的推荐列表。
+        await edit(current => ({ ...current, disabledModels: [], enabledModels: [] }));
       }
       if (r.op === 'modelSettings') {
         const row = (await controller.ensure(s)).find(row => row.id === r.id);

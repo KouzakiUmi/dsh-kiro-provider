@@ -19,6 +19,7 @@ export const Config = z.object({
   cliPath: z.string().default('').volatile(),
   keyRef: z.string().default('KIRO_API_KEY').volatile(),
   disabledModels: z.array(z.string()).default([]).volatile(),
+  enabledModels: z.array(z.string()).default([]).volatile(),
   modelDefaults: z.array(z.object({ id: z.string(), effort: z.string().default(''), maxTokens: z.number().default(0) })).default([]).volatile(),
   quotaRefreshSeconds: z.number().default(60).volatile(),
   streamIdleTimeoutMs: z.number().default(180_000).volatile(),
@@ -37,7 +38,7 @@ export function apply(ctx, config) {
   const grants = oauthGrants(() => ctx.get('credentials'));
   const controller = createController({ root, store,
     settings: () => ({ mode: config.mode.get(), region: config.region.get(), cliPath: config.cliPath.get(), keyRef: config.keyRef.get(),
-      disabledModels: config.disabledModels.get(), modelDefaults: config.modelDefaults.get(),
+      disabledModels: config.disabledModels.get(), enabledModels: config.enabledModels.get(), modelDefaults: config.modelDefaults.get(),
       quotaRefreshSeconds: config.quotaRefreshSeconds.get(), streamIdleTimeoutMs: config.streamIdleTimeoutMs.get(), maxRequestImageBytes: config.maxRequestImageBytes.get(),
       autoOpenBrowser: config.autoOpenBrowser.get() }),
     readKey: async ref => (await ctx.get('credentials')?.resolve(credentialRef(ref)))?.value,

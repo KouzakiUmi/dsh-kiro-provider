@@ -30,6 +30,14 @@ ACP 是代理会话接口，不是无状态模型 API；CLI 路径只转发文�
 
 设置页为四 tab（概览/模型/连接与登录/高级），tab 条支持方向键/Home/End 与 roving tabindex。概览含连接状态 chips 与额度面板；模型面板含名称+ID 搜索、`已启用 n/m` 计数、默认 6 条折叠展开、启用优先排序；高级面板暴露额度刷新间隔、流空闲超时、请求图片上限与登录自动开窗开关，边界真源为 `remote.mjs` 的 `ADVANCED_BOUNDS`（host 归一化与 client 校验共用）。
 
+## 模型显示投影（Unified Router 对齐）
+
+`model-name.mjs` 为 host/client 共享纯函数，参考 `dsh-unified-router` 的 DESIGN-STANDARDS §3 与 `lib/model-catalog.js` 模式（自实现，不导入其代码）：
+
+- **可读显示名**：`readableModelName(id, name)` 清理 ID 格式——品牌词表（Claude/GPT/Grok/Kimi/MiniMax/GLM/DeepSeek/Qwen…）、连字符分词、版本连字符转点（`4-5`→`4.5`）、粘连品牌拆分（`qwen3`→`Qwen 3`）。请求 ID 原样保留在模型行副行与 RPC 中；DSH 选择器（`modelInfo`）与设置页共用同一投影。
+- **扣费倍率徽标**：`modelRateBadge(rate)` 输出 `x{倍率}` 标签 + 消耗色调（≤0.5 success / ≤1.5 info / >1.5 warning）；倍率只由徽标表达，不拼进名称。数据来自目录 `rateMultiplier`（`rateUnit=credit`），仅展示。
+- **旧版默认关闭**：`legacyModelIds(rows)` 双层判定——已核实外部后继表（SUPERSEDED，2026-11-21 直接访问 Artificial Analysis 排行榜内嵌数据核对 `deprecated` 标志，Kimi 用官方平台文档；逐条证据见 [模型策展](model-curation.md)）+ 目录内「同家族存在更高版本」（家族=去掉尾版本段的 ID，版本连字符先转点；版本段允许单字母前缀如 `m2.5`/`k3`）。变体型号（`gpt-5.6-sol/terra/luna`）不互相压制，但 GPT-5.6 全系经 AA 确认已弃用。真实目录 23 模型中 18 个默认关闭，仅 Auto 与 Claude 5.5 三型、Grok 4.7 默认开启。启停为三态：`disabledModels`（显式关）> `enabledModels`（显式开）> 推荐默认；「恢复推荐」（`recommend` op）清除两数组回到推荐列表。Host 的 `status`/`listModels`/`prepareCall` 与 client 开关共用 `controller.modelEnabled` 语义（legacy 按 rows 引用缓存）。
+
 ## opendesign 对齐（行为模式）
 
 参考 `dsh-opendesign-corouter` 0.3.4 的设计，取其行为模式而非文件布局：
@@ -55,7 +63,7 @@ ACP 是代理会话接口，不是无状态模型 API；CLI 路径只转发文�
 
 ## 验收
 
-离线测试 58 项：模拟 CLI/ACP 和 Kiro HTTP/AWS 二进制响应，覆盖请求主机限制、凭据边界、模型发现、帧校验、MCP 工具别名及结果回放、CLI 权限拒绝、取消和 DSH 生命周期；新增持久化原子写/锁竞合/损坏容忍/跨实例合并、拉取读取分离/去重/退避/代际失效、额度投影与校验、RPC 新 op 契约、client store 单飞/过期响应丢弃/乐观写回滚、pill 接线、调度器暂停与恢复、开窗白名单与平台 opener，以及展开函数组件的渲染冒烟测试（kit 原语与全部面板组件体，捕获 props 简写笔误类运行时错误）。测试状态文件一律临时目录隔离；登录测试关闭自动开窗，不产生真实浏览器副作用。
+离线测试 65 项：模拟 CLI/ACP 和 Kiro HTTP/AWS 二进制响应，覆盖请求主机限制、凭据边界、模型发现、帧校验、MCP 工具别名及结果回放、CLI 权限拒绝、取消和 DSH 生命周期；新增持久化原子写/锁竞合/损坏容忍/跨实例合并、拉取读取分离/去重/退避/代际失效、额度投影与校验、RPC 新 op 契约、client store 单飞/过期响应丢弃/乐观写回滚、pill 接线、调度器暂停与恢复、开窗白名单与平台 opener、显示名/倍率徽标/旧版判定（真实 Kiro 目录 fixture + AA 核实的外部后继表）、三态启停与恢复推荐、service 写路径（model/recommend/modelSettings 的编辑回调），以及展开函数组件的渲染冒烟测试（kit 原语与全部面板组件体，捕获 props 简写笔误类运行时错误）。测试状态文件一律临时目录隔离；登录测试关闭自动开窗，不产生真实浏览器副作用。
 
 Alpha 3 的隔离 DSH Host 使用现有的短期会话凭据做真实测试：管理面返回 23 个模型，运行时返回 Claude Sonnet 5.5 的流式文本。两轮工具测试确认发送时使用合法别名，DSH 收到原工具名及参数，回传同一调用 ID 的合成结果后模型返回预期文本。测试期间网络只访问 Kiro 两个 HTTPS 域名，未修改凭据或桌面 Profile。API Key 路径尚未使用真实 Key 测试。
 

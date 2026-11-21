@@ -6,9 +6,10 @@ import { KiroProblem, safeProblem } from './cli.mjs';
 import { generate } from './adapter.mjs';
 import { directFetch, directProfile } from './direct.mjs';
 import { ROUTE, directMode } from './controller.mjs';
+import { readableModelName } from './model-name.mjs';
 
 function modelInfo(row) {
-  return { provider: ROUTE, id: row.id, name: row.name, inputModalities: row.inputModalities ?? ['text'],
+  return { provider: ROUTE, id: row.id, name: readableModelName(row.id, row.name), inputModalities: row.inputModalities ?? ['text'],
     ...(row.contextWindow ? { context: { contextWindow: row.contextWindow } } : {}),
     ...(row.efforts.length ? { reasoning: { efforts: row.efforts.map(id => ({ id: ReasoningEffortId(id), name: id })) } } : {}) };
 }
@@ -53,7 +54,7 @@ export function adapterFor(controller, ctx) {
     }
   }
   async function exact(s, id, signal) {
-    if (s.disabledModels.includes(id)) throw new LlmError('该 Kiro 模型已关闭。', 'MODEL_UNSUPPORTED');
+    if (!controller.modelEnabled(s, id)) throw new LlmError('该 Kiro 模型已关闭。', 'MODEL_UNSUPPORTED');
     const row = (await controller.ensure(s, signal)).find(row => row.id === id);
     if (!row) throw new LlmError('该 Kiro 账号未发布所选模型。', 'UNKNOWN_MODEL');
     return row;
@@ -89,7 +90,7 @@ export function adapterFor(controller, ctx) {
       await controller.ready;
       const view = controller.read(s);
       controller.revalidate(s);
-      return view.rows.filter(row => !s.disabledModels.includes(row.id)).map(modelInfo);
+      return view.rows.filter(row => controller.modelEnabled(s, row.id)).map(modelInfo);
     }
     async resolveModel(provider, id, signal) {
       const s = controller.snapshot();
@@ -98,12 +99,12 @@ export function adapterFor(controller, ctx) {
     }
     imageRequestPricing(provider, id) {
       const s = controller.snapshot();
-      const row = directMode(s.mode) && controller.read(s).rows.find(row => row.id === id && !s.disabledModels.includes(row.id));
+      const row = directMode(s.mode) && controller.read(s).rows.find(row => row.id === id && controller.modelEnabled(s, row.id));
       return row ? nativeAdapter(s, row).imageRequestPricing(provider, id) : undefined;
     }
     imageRequestTarget(provider, id, image) {
       const s = controller.snapshot();
-      const row = directMode(s.mode) && controller.read(s).rows.find(row => row.id === id && !s.disabledModels.includes(row.id));
+      const row = directMode(s.mode) && controller.read(s).rows.find(row => row.id === id && controller.modelEnabled(s, row.id));
       return row ? nativeAdapter(s, row).imageRequestTarget(provider, id, image) : super.imageRequestTarget(provider, id, image);
     }
     async prepareCall(_provider, id, signal) {

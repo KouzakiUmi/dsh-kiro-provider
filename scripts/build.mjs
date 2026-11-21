@@ -13,6 +13,7 @@ for (const name of await readdir(source)) if (name.endsWith('.mjs')) {
 // references are bare identifiers. Order is dependency-first; new modules must register here.
 const clientModules = [
   'remote.mjs',
+  'model-name.mjs',
   'client/styles.js',
   'client/kit.js',
   'client/store.js',

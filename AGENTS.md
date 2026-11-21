@@ -23,7 +23,7 @@ index.mjs（组合根：Config + apply + 生命周期）
 
 Client（浏览器 React，`src/client/*.js`）：`styles → kit → store → login/connection/models/usage/advanced → pill → settings → index`。构建按 `scripts/build.mjs` 的依赖序表拼接进单一 `window.__ModuleLoader__.load` 工厂作用域；**模块不写 import**，跨模块用裸标识符，新模块必须登记进顺序表。`remote.mjs` 是 host/client 共享契约（含 ADVANCED_BOUNDS 边界真源），拼接在首位。
 
-依赖单向：组合根 → 编排 → 中间件 → 传输；client 只经 `kiroProvider` RPC 消费 host 投影，不 import 宿主包。
+依赖单向：组合根 → 编排 → 中间件 → 传输；client 只经 `kiroProvider` RPC 消费 host 投影，不 import 宿主包。`model-name.mjs` 是 host/client 共享显示投影（可读名/倍率徽标/旧版判定），拼接在 remote.mjs 之后。
 
 ## 职责唯一落位表
 
@@ -36,6 +36,8 @@ Client（浏览器 React，`src/client/*.js`）：`styles → kit → store → 
 | 登录自动开窗 | `browser-open.mjs`（白名单校验，autoOpenBrowser 开关） |
 | 高级设置边界 | `remote.mjs` ADVANCED_BOUNDS（host 归一化与 client 校验共用） |
 | 模型目录解析与校验 | `catalog.mjs`（CLI JSON）+ `direct-http.mjs`（直连分页） |
+| 显示名/倍率徽标/旧版判定 | `model-name.mjs`（共享纯函数；请求 ID 原样保留，倍率只走徽标不进名称） |
+| 模型三态启停 | `disabledModels`（显式关）> `enabledModels`（显式开）> 推荐默认（旧版关）；`recommend` op 清除手动开关 |
 | 额度解析与校验 | `usage.mjs`（GetUsageLimits / Get-Usage-Limits 投影） |
 | 凭据 | DSH credentials：API Key/会话按引用解析；OAuth 归 `oauth-grant.mjs` 记录 |
 | RPC 契约（op 与响应校验） | `remote.mjs`（双端共用） |
@@ -63,6 +65,6 @@ Client（浏览器 React，`src/client/*.js`）：`styles → kit → store → 
 
 ## 交接快照
 
-- 已完成：host 模块化拆分、持久化中间件、目录/额度拉取读取分离、modelDefaults、creditRate、RPC 扩展（usage/modelSettings/advanced）、client kit 化 UI、上下文 pill、58 项离线测试（含中间件/额度/契约/client store/pill 接线/组件渲染冒烟/调度器/开窗白名单）。opendesign 对齐（A–H+I）：四 tab 布局、额度指标卡+严重度链+活倒计时、自动刷新暂停、模型搜索/计数/折叠、乐观写回滚、高级 tab、登录自动开窗（可关）。独立交叉核验发现的 pill 写路径缺陷与 Switch props 笔误均已修复并加回归测试。
+- 已完成：host 模块化拆分、持久化中间件、目录/额度拉取读取分离、modelDefaults、creditRate、RPC 扩展（usage/modelSettings/advanced/recommend）、client kit 化 UI、上下文 pill、65 项离线测试（含中间件/额度/契约/client store/pill 接线/组件渲染冒烟/调度器/开窗白名单/显示投影/三态启停/service 写路径）。opendesign 对齐（A–H+I）与 Unified Router 对齐（可读显示名、x倍率徽标+消耗色调、旧版默认关闭+恢复推荐）均已落地；旧版判定经 AA 直连数据核实（docs/model-curation.md，23 模型中 18 旧版）。独立交叉核验发现的 pill 写路径缺陷与 Switch props 笔误均已修复并加回归测试。
 - 未端到端验证：桌面设置页亮/暗色与窄屏渲染、pill 运行时行为、真实账号额度接口（协议取自 Magpie 公开参考，离线测试用模拟响应）。验证入口：安装 bundle 后打开设置 → Kiro Provider；pill 需会话选中 kiro-native 模型。
 - 协议参考与设计取舍见 [设计说明](docs/design.md)；公开仓库 github.com/KouzakiUmi/dsh-kiro-provider。

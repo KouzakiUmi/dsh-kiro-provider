@@ -90,6 +90,33 @@ test('catalog reads never fetch; refresh deduplicates, isolates connections and 
   reopened.dispose();
 });
 
+test('recommended defaults disable legacy versions; explicit overrides win', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-kiro-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = createStore({ file: join(root, 'state.json'), validate: (kind, value) => snapshotValidators[kind]?.(value) });
+  let current = { mode: 'local', cliPath: '', keyRef: 'KIRO_API_KEY', disabledModels: [], enabledModels: [], modelDefaults: [] };
+  const catalog = [{ id: 'claude-sonnet-4.5' }, { id: 'claude-sonnet-5.5' }, { id: 'foo-5.6-sol' }, { id: 'foo-5.6-terra' }];
+  const c = createController({ root, store, settings: () => current, readKey: async () => undefined, deps: {
+    resolve: async () => 'fake-binary', options: async () => ({ env: {} }), check: async () => {}, version: async () => '3.5.0',
+    run: async () => ({ code: 0, stdout: JSON.stringify(catalog) }),
+  } });
+  await c.ready;
+  await c.refresh(c.snapshot());
+  const byId = Object.fromEntries(c.status(c.snapshot()).models.map(m => [m.id, m]));
+  assert.equal(byId['claude-sonnet-4.5'].enabled, false);
+  assert.equal(byId['claude-sonnet-4.5'].legacy, true);
+  assert.equal(byId['claude-sonnet-5.5'].enabled, true);
+  assert.equal(byId['claude-sonnet-5.5'].legacy, false);
+  assert.equal(byId['foo-5.6-sol'].enabled, true);
+  assert.equal(byId['foo-5.6-terra'].enabled, true);
+  assert.equal(c.modelEnabled(c.snapshot(), 'claude-sonnet-4.5'), false);
+  current = { ...current, enabledModels: ['claude-sonnet-4.5'] };
+  assert.equal(c.modelEnabled(c.snapshot(), 'claude-sonnet-4.5'), true);
+  current = { ...current, disabledModels: ['claude-sonnet-4.5'] };
+  assert.equal(c.modelEnabled(c.snapshot(), 'claude-sonnet-4.5'), false);
+  c.dispose();
+});
+
 test('model defaults normalize and apply only to unset options', async t => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-kiro-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));

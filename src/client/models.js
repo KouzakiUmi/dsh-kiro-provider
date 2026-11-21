@@ -1,10 +1,12 @@
 // 模型面板：搜索 + 启用计数 + 默认 6 条折叠 + 每模型默认设置编辑器。
+// 显示名清理 ID 格式（请求 ID 保留在副行）；倍率只由徽标表达；旧版挂「旧版」标记。
 export const sortModelsByEnabled = models => [...models].sort((a, b) => Number(b.enabled) - Number(a.enabled));
 export const filterModels = (models, query) => {
   const q = String(query ?? '').trim().toLowerCase();
-  return q ? models.filter(m => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)) : models;
+  return q ? models.filter(m => `${m.id} ${m.name ?? ''} ${readableModelName(m.id, m.name)}`.toLowerCase().includes(q)) : models;
 };
 const PAGE_SIZE = 6;
+const RATE_TONE = { success: 'ok', info: 'accent', warning: 'warn' };
 
 export function ModelsPanel({ state, store }) {
   const { view, busy } = state;
@@ -22,6 +24,7 @@ export function ModelsPanel({ state, store }) {
   return h(Section, {
     title: '模型目录', summary,
     actions: canFetch ? h(React.Fragment, null,
+      button('恢复推荐', () => void store.restoreRecommended(), Boolean(busy.catalog), 'quiet'),
       button('检测连接', () => void store.detect(), Boolean(busy.catalog)),
       button('刷新模型', () => void store.refresh(), Boolean(busy.catalog), 'primary')) : null,
   },
@@ -54,15 +57,18 @@ function ModelRow({ model, defaults, busy, store }) {
   const tokens = maxTokens.trim() === '' ? 0 : Number(maxTokens);
   const tokensValid = Number.isSafeInteger(tokens) && tokens >= 0 && (!tokens || (range && tokens >= range.min && tokens <= range.max));
   const unchanged = effort === (defaults?.effort ?? '') && tokens === (defaults?.maxTokens ?? 0);
+  const displayName = readableModelName(model.id, model.name);
+  const badge = modelRateBadge(model.creditRate);
   const tags = [
     model.contextWindow ? h(Chip, { key: 'ctx' }, `${formatTokens(model.contextWindow)} 上下文`) : null,
-    model.creditRate ? h(Chip, { key: 'rate', tone: 'accent' }, `${model.creditRate}× credits`) : null,
+    badge ? h(Chip, { key: 'rate', tone: RATE_TONE[badge.tone], title: `扣费倍率：每请求消耗 ${badge.multiplier}× credits` }, badge.label) : null,
+    model.legacy ? h(Chip, { key: 'legacy', tone: 'warn', title: supersededBy(model.id) ? `已由 ${supersededBy(model.id)} 替代` : '同家族已有更新版本' }, '旧版') : null,
     model.inputModalities?.includes('image') ? h(Chip, { key: 'img' }, '图片') : null,
   ].filter(Boolean);
 
   return h(Row, {
-    name: model.name, tags, meta: model.id, off: !model.enabled,
-    switchControl: h(Switch, { checked: model.enabled, disabled: busy, label: `启用 ${model.name}`, onChange: () => void store.toggleModel(model.id, !model.enabled) }),
+    name: displayName, tags, meta: model.id, off: !model.enabled,
+    switchControl: h(Switch, { checked: model.enabled, disabled: busy, label: `启用 ${displayName}`, onChange: () => void store.toggleModel(model.id, !model.enabled) }),
     moreLabel: '默认设置', expanded: open, onToggle: () => setOpen(value => !value),
     detail: h('div', { className: 'kiro-form' },
       h('label', { className: 'kiro-field' }, '默认思考档位',

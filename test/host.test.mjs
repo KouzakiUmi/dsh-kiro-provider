@@ -7,6 +7,9 @@ import { Context } from '@deepseek-ai/cordis';
 import { LlmRuntime } from '@deepseek-ai/dsh-llm';
 import * as plugin from '../lib/index.mjs';
 import { parseRequest, readSettingsReply } from '../lib/remote.mjs';
+import { createController, snapshotValidators } from '../lib/controller.mjs';
+import { createInvoker } from '../lib/service.mjs';
+import { createStore } from '../lib/store.mjs';
 
 const tempState = async t => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-kiro-host-'));
@@ -71,6 +74,7 @@ test('settings responses validate the full view and distinguish connection check
 
 test('request parsing covers usage and per-model settings within bounds', () => {
   assert.deepEqual(parseRequest({ op: 'usage' }), { op: 'usage' });
+  assert.deepEqual(parseRequest({ op: 'recommend' }), { op: 'recommend' });
   assert.deepEqual(parseRequest({ op: 'modelSettings', id: 'claude-sonnet-5.5', effort: 'high', maxTokens: 4096 }),
     { op: 'modelSettings', id: 'claude-sonnet-5.5', effort: 'high', maxTokens: 4096 });
   assert.deepEqual(parseRequest({ op: 'modelSettings', id: 'm' }), { op: 'modelSettings', id: 'm', effort: '', maxTokens: 0 });
@@ -82,6 +86,40 @@ test('request parsing covers usage and per-model settings within bounds', () => 
   assert.throws(() => parseRequest({ op: 'advanced', autoOpenBrowser: true, quotaRefreshSeconds: 1, streamIdleTimeoutMs: 240000, maxRequestImageBytes: 5000000 }));
   assert.throws(() => parseRequest({ op: 'advanced', quotaRefreshSeconds: 60, streamIdleTimeoutMs: 240000, maxRequestImageBytes: 5000000 }));
   assert.throws(() => readSettingsReply({ ok: true, value: { ok: true, value: view({ advanced: { quotaRefreshSeconds: 60 } }) } }, 'status'), /设置数据不完整/);
+});
+
+test('service model/recommend/modelSettings ops write the override arrays correctly', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-kiro-svc-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const store = createStore({ file: join(dir, 'state.json'), validate: (kind, value) => snapshotValidators[kind]?.(value) });
+  let config = { mode: 'local', cliPath: '', keyRef: 'KIRO_API_KEY', disabledModels: [], enabledModels: [], modelDefaults: [],
+    quotaRefreshSeconds: 60, streamIdleTimeoutMs: 180000, maxRequestImageBytes: 10000000, autoOpenBrowser: true };
+  const catalog = [{ id: 'claude-sonnet-4.5', reasoning_efforts: ['low', 'max'] }, { id: 'claude-sonnet-5.5', reasoning_efforts: ['low', 'max'] }];
+  const controller = createController({ root: dir, store, settings: () => config, readKey: async () => undefined, deps: {
+    resolve: async () => 'fake-binary', options: async () => ({ env: {} }), check: async () => {}, version: async () => '3.5.0',
+    run: async () => ({ code: 0, stdout: JSON.stringify(catalog) }),
+  } });
+  const invoke = createInvoker({ controller, oauth: { pending: () => false }, grants: { connected: async () => false },
+    edit: async fn => { config = fn(config); }, modelsChanged: () => {}, canEdit: () => true });
+  await controller.ready;
+  assert.equal((await invoke({ op: 'refresh' })).ok, true);
+  // 开启旧版 → 写入 enabledModels，与 disabledModels 互斥。
+  assert.equal((await invoke({ op: 'model', id: 'claude-sonnet-4.5', enabled: true })).ok, true);
+  assert.deepEqual(config.enabledModels, ['claude-sonnet-4.5']);
+  assert.deepEqual(config.disabledModels, []);
+  assert.equal((await invoke({ op: 'model', id: 'claude-sonnet-4.5', enabled: false })).ok, true);
+  assert.deepEqual(config.enabledModels, []);
+  assert.deepEqual(config.disabledModels, ['claude-sonnet-4.5']);
+  // 恢复推荐 → 清空两数组。
+  assert.equal((await invoke({ op: 'recommend' })).ok, true);
+  assert.deepEqual(config.enabledModels, []);
+  assert.deepEqual(config.disabledModels, []);
+  // 模型默认设置按目录校验后写入。
+  assert.equal((await invoke({ op: 'modelSettings', id: 'claude-sonnet-5.5', effort: 'max', maxTokens: 0 })).ok, true);
+  assert.deepEqual(config.modelDefaults, [{ id: 'claude-sonnet-5.5', effort: 'max' }]);
+  assert.equal((await invoke({ op: 'modelSettings', id: 'claude-sonnet-5.5', effort: 'xhigh', maxTokens: 0 })).ok, false);
+  controller.dispose();
+  store.dispose();
 });
 
 test('alpha.2 gateway configuration migrates to direct mode without contacting a loopback URL', async t => {
