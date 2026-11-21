@@ -7,10 +7,12 @@ import { generate } from './adapter.mjs';
 import { directFetch, directProfile } from './direct.mjs';
 import { ROUTE, directMode } from './controller.mjs';
 import { readableModelName, selectorRateBadge } from './model-name.mjs';
+import { effectiveContextWindow } from './remote.mjs';
 
-function modelInfo(row) {
+function modelInfo(row, contextTier) {
+  const contextWindow = effectiveContextWindow(row.contextWindow, contextTier);
   return { provider: ROUTE, id: row.id, name: readableModelName(row.id, row.name), inputModalities: row.inputModalities ?? ['text'],
-    ...(row.contextWindow ? { context: { contextWindow: row.contextWindow } } : {}),
+    ...(contextWindow ? { context: { contextWindow } } : {}),
     ...(row.efforts.length ? { reasoning: { efforts: row.efforts.map(id => ({ id: ReasoningEffortId(id), name: id })) } } : {}) };
 }
 
@@ -19,7 +21,8 @@ export function adapterFor(controller, ctx) {
   const sdk = anthropicMessagesApi();
   const credentials = new InMemoryCredentialStore();
   function nativeAdapter(s, row, tuning, onFailure) {
-    const profile = directProfile(row, ROUTE, retryPolicy, s.advanced);
+    const contextTier = s.modelDefaults.find(d => d.id === row.id)?.contextTier;
+    const profile = directProfile(row, ROUTE, retryPolicy, { ...s.advanced, contextWindow: effectiveContextWindow(row.contextWindow, contextTier) });
     const fetch = directFetch({ row, tuning, onFailure, credential: async signal => {
       if (s.mode === 'direct') return { region: s.region, token: await controller.keyFor(s) };
       const auth = await controller.sessionFor(s, signal);
@@ -92,13 +95,14 @@ export function adapterFor(controller, ctx) {
       controller.revalidate(s);
       return view.rows.filter(row => controller.modelEnabled(s, row.id)).map(row => {
         const badge = selectorRateBadge(row.creditRate);
-        return { ...modelInfo(row), ...(badge ? { badge } : {}) };
+        return { ...modelInfo(row, s.modelDefaults.find(d => d.id === row.id)?.contextTier), ...(badge ? { badge } : {}) };
       });
     }
     async resolveModel(provider, id, signal) {
       const s = controller.snapshot();
       const row = await exact(s, id, signal);
-      return directMode(s.mode) ? nativeAdapter(s, row).resolveModel(provider, id, signal) : modelInfo(row);
+      return directMode(s.mode) ? nativeAdapter(s, row).resolveModel(provider, id, signal)
+        : modelInfo(row, s.modelDefaults.find(d => d.id === id)?.contextTier);
     }
     imageRequestPricing(provider, id) {
       const s = controller.snapshot();
@@ -120,7 +124,7 @@ export function adapterFor(controller, ctx) {
           return dispatchDirect(s, row, { ...options, reasoningEffort: effort, maxTokens });
         } };
       }
-      const model = modelInfo(row);
+      const model = modelInfo(row, s.modelDefaults.find(d => d.id === id)?.contextTier);
       return { model, stream: options => {
         const { effort } = withDefaults(s, row, options);
         return dispatch(s, model, { ...options, reasoningEffort: effort });

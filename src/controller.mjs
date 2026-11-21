@@ -4,7 +4,7 @@ import { apiKey, discoverDirect, discoverSession, sessionCredential, usageDirect
 import { createCatalog, parseCatalog, validateCatalog, MODEL_ID, effortIds } from './catalog.mjs';
 import { createUsage, parseUsage, validateUsage } from './usage.mjs';
 import { createUsageScheduler } from './usage-scheduler.mjs';
-import { normalizeAdvanced } from './remote.mjs';
+import { normalizeAdvanced, contextTierIds } from './remote.mjs';
 import { legacyModelIds } from './model-name.mjs';
 
 export const ROUTE = 'kiro-native';
@@ -20,9 +20,10 @@ function normalizeDefaults(rows) {
     if (!row || typeof row.id !== 'string' || !MODEL_ID.test(row.id) || seen.has(row.id)) continue;
     const effort = effortIds.has(row.effort) ? row.effort : undefined;
     const maxTokens = Number.isSafeInteger(row.maxTokens) && row.maxTokens > 0 ? row.maxTokens : undefined;
-    if (!effort && !maxTokens) continue;
+    const contextTier = contextTierIds.includes(row.contextTier) ? row.contextTier : undefined;
+    if (!effort && !maxTokens && !contextTier) continue;
     seen.add(row.id);
-    out.push({ id: row.id, ...(effort ? { effort } : {}), ...(maxTokens ? { maxTokens } : {}) });
+    out.push({ id: row.id, ...(effort ? { effort } : {}), ...(maxTokens ? { maxTokens } : {}), ...(contextTier ? { contextTier } : {}) });
   }
   return out;
 }

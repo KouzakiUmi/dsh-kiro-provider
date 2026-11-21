@@ -21,8 +21,8 @@ ACP 是代理会话接口，不是无状态模型 API；CLI 路径只转发文�
 
 - **额度面板**：API Key 走管理面 `AmazonCodeWhispererService.GetUsageLimits`（AWS JSON 1.0），会话/OAuth 走 `Get-Usage-Limits?resourceType=CREDIT`。投影套餐名、月度 credits、超额上限（启用 overage 时套餐窗口仅展示、超额窗口才是停止线）、ACTIVE 赠送额度与免费试用；数字只取响应值，缺失不估算。CLI 三种模式无此接口，面板给出账户页入口。协议字段取自 Magpie 公开源码参考，真实账号响应尚未端到端验证。
 - **credit 倍率**：目录行 `rateMultiplier`（`rateUnit=credit`）仅展示，表示请求消耗的倍率；实际消耗以流内 meteringEvent 为准（本版本不统计每请求消耗）。
-- **每模型默认设置**：`modelDefaults` 存于插件配置（id + effort + maxTokens），调用时只填充未显式指定的参数；effort 须在该模型公布档位内，maxTokens 须在 `maxTokenRange` 内，保存时按目录校验。CLI 路由不支持输出上限，默认 maxTokens 不生效。
-- **上下文 pill**：`conversation.input.right` slot，注入 `ctx.modelDirectories.directoryFor(sessionId)` 的 ModelDirectory 本体：订阅其 `store` 快照读取会话选择，档位写入走实例的 `select`（官方 `session.selectModel`）。仅当前 provider 为 `kiro-native` 时渲染上下文窗口与档位快捷按钮。服务契约按目标 Core 0.2.2-rc.5 的 `dsh-client-ui-model-selection` 源码核实（`select` 在实例上，快照 store 只有 subscribe/getSnapshot）。
+- **每模型默认设置**：`modelDefaults` 存于插件配置（id + effort + maxTokens + contextTier），调用时 effort/maxTokens 只填充未显式指定的参数；effort 须在该模型公布档位内，maxTokens 须在 `maxTokenRange` 内，保存时按目录校验；contextTier 为上下文档位（见药丸条目）。CLI 路由不支持输出上限，默认 maxTokens 不生效。
+- **上下文窗口调整药丸**（参考 kxyai `modelContextTiers` 语义）：`conversation.input.right` slot，注入 `ctx.modelDirectories.directoryFor(sessionId)` 的 ModelDirectory 本体，订阅其 `store` 快照读取会话选择；仅当前 provider 为 `kiro-native` 时渲染。快捷档 `standard/extended/maximum` = 256K/500K/1M（`CONTEXT_TIERS`，真源在共享契约 `remote.mjs`），以模型原生窗口封顶（`effectiveContextWindow = min(native, tier)`），等于/超过原生的档位与「默认」同值不重复展示。档位按模型持久化在 `modelDefaults.contextTier`，药丸经 **`modelContext` 字段级合并 op** 只写 contextTier（service 端保留配置中已有的 effort/maxTokens，杜绝药丸陈旧快照覆盖新设置）；设置页编辑器经 `modelSettings` 整行写。写入后 `llm/adapters-updated` 通知选择器目录刷新但不失效持久化快照。覆写只作用于广告给 DSH 的上下文预算（`modelInfo.context` 与直连 `directProfile` 的 contextWindow，影响压缩/计量），不改变上游请求参数。错误态提供原地重试。思考档位不再由药丸切换（会话档位走核心模型座 effort 菜单，默认档位在模型设置）。
 
 ## 客户端结构
 

@@ -45,7 +45,7 @@ Client（浏览器 React，`src/client/*.js`）：`styles → kit → store → 
 | Client 状态 | `client/store.js`（快照 + 分域 busy + 序号票 + 写操作乐观投影/失败回滚） |
 | 设置页布局 | `client/settings.js` 四 tab（概览/模型/连接与登录/高级）+ 键盘导航 |
 | 额度视图投影 | `client/usage.js` quotaStatusView 纯函数（error>需登录>stale>空>最差窗口） |
-| 会话输入栏 pill | `client/pill.js`（注入 ModelDirectory 本体：订阅其 store 快照，档位写入走实例 select） |
+| 会话输入栏药丸 | `client/pill.js`（上下文窗口调整：256K/500K/1M 快捷档+默认，按模型持久化 contextTier，原生窗口封顶；注入 ModelDirectory 本体读会话选择，写入走 modelContext 字段级合并 op） |
 
 ## 技术范式锁
 
@@ -65,6 +65,6 @@ Client（浏览器 React，`src/client/*.js`）：`styles → kit → store → 
 
 ## 交接快照
 
-- 已完成：host 模块化拆分、持久化中间件、目录/额度拉取读取分离、modelDefaults、creditRate、RPC 扩展（usage/modelSettings/advanced/recommend）、client kit 化 UI、上下文 pill、67 项离线测试（含中间件/额度/契约/client store/pill 接线/组件渲染冒烟/调度器/开窗白名单/显示投影/三态启停/service 写路径/选择器 badge）。opendesign 对齐（A–H+I）与 Unified Router 对齐（可读显示名、x倍率徽标+消耗色调、旧版默认关闭+恢复推荐、选择器原生 badge）均已落地；旧版判定经 AA 直连数据核实（docs/model-curation.md，23 模型中 18 旧版）。独立交叉核验发现的 pill 写路径缺陷与 Switch props 笔误均已修复并加回归测试。
+- 已完成：host 模块化拆分、持久化中间件、目录/额度拉取读取分离、modelDefaults（effort/maxTokens/contextTier）、creditRate、RPC 扩展（usage/modelSettings/modelContext/advanced/recommend）、client kit 化 UI、上下文窗口调整药丸（kxyai 档位语义）、71 项离线测试（含中间件/额度/契约/client store/药丸接线/组件渲染冒烟/调度器/开窗白名单/显示投影/三态启停/service 写路径/选择器 badge/上下文档位/直连覆写）。opendesign 对齐（A–H+I）与 Unified Router 对齐（可读显示名、x倍率徽标+消耗色调、旧版默认关闭+恢复推荐、选择器原生 badge）均已落地；旧版判定经 AA 直连数据核实（docs/model-curation.md，23 模型中 18 旧版）。独立交叉核验发现的 pill 写路径缺陷、Switch props 笔误与药丸陈旧默认覆盖竞态均已修复并加回归测试。
 - 未端到端验证：桌面设置页亮/暗色与窄屏渲染、pill 运行时行为、真实账号额度接口（协议取自 Magpie 公开参考，离线测试用模拟响应）。验证入口：安装 bundle 后打开设置 → Kiro Provider；pill 需会话选中 kiro-native 模型。
 - 协议参考与设计取舍见 [设计说明](docs/design.md)；公开仓库 github.com/KouzakiUmi/dsh-kiro-provider。

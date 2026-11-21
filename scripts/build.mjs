@@ -36,6 +36,6 @@ for (const name of clientModules) {
   }
   bundle += `${text.replace(/^export /gm, '')}\n`;
 }
-const factory = `window.__ModuleLoader__.load({id:'dsh-kiro-provider',factory:(require)=>{\n'use strict';\nconst React = require('react');\nconst h = React.createElement;\n${bundle}\nreturn {name,inject,apply,createKiroStore,normalizeLogin,registerContextPill,kit:{Section,ListBox,Switch,Row,Chip,Notice,EmptyState,Meter,RelativeDeadline,NumberField,button},ModelsPanel,UsagePanel,AdvancedPanel,LoginPanel,ConnectionPanel,Settings,quotaStatusView,sortModelsByEnabled,filterModels,tabAfter};\n}});\n`;
+const factory = `window.__ModuleLoader__.load({id:'dsh-kiro-provider',factory:(require)=>{\n'use strict';\nconst React = require('react');\nconst h = React.createElement;\n${bundle}\nreturn {name,inject,apply,createKiroStore,normalizeLogin,registerContextPill,KiroContextPill,kit:{Section,ListBox,Switch,Row,Chip,Notice,EmptyState,Meter,RelativeDeadline,NumberField,button},ModelsPanel,UsagePanel,AdvancedPanel,LoginPanel,ConnectionPanel,Settings,quotaStatusView,sortModelsByEnabled,filterModels,tabAfter};\n}});\n`;
 new vm.Script(factory);
 await writeFile(new URL('client.js', output), factory);

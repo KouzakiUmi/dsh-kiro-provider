@@ -5,7 +5,7 @@ import { openBrowser } from './browser-open.mjs';
 
 // Single-descriptor RPC with an op whitelist. Reads short-circuit to the store;
 // writes go through the Config Editor and never carry secrets.
-export function createInvoker({ controller, oauth, grants, edit, modelsChanged, canEdit }) {
+export function createInvoker({ controller, oauth, grants, edit, modelsChanged, notifyModels, canEdit }) {
   return async function invoke(value) {
     try {
       const r = parseRequest(value);
@@ -54,6 +54,19 @@ export function createInvoker({ controller, oauth, grants, edit, modelsChanged, 
         // 恢复推荐：清除全部手动开关，回到「旧版默认关闭」的推荐列表。
         await edit(current => ({ ...current, disabledModels: [], enabledModels: [] }));
       }
+      if (r.op === 'modelContext') {
+        if (!(await controller.ensure(s)).some(row => row.id === r.id)) throw new KiroProblem('当前账号没有此 Kiro 模型。');
+        // 字段级合并：只动 contextTier，保留该模型已有的 effort/maxTokens（药丸快照可能陈旧）。
+        await edit(current => {
+          const rows = current.modelDefaults ?? [];
+          const prev = rows.find(d => d?.id === r.id);
+          const rest = rows.filter(d => d?.id !== r.id);
+          const next = { id: r.id, ...(prev?.effort ? { effort: prev.effort } : {}), ...(prev?.maxTokens ? { maxTokens: prev.maxTokens } : {}),
+            ...(r.contextTier ? { contextTier: r.contextTier } : {}) };
+          return { ...current, modelDefaults: next.effort || next.maxTokens || next.contextTier ? [...rest, next] : rest };
+        });
+        notifyModels?.();
+      }
       if (r.op === 'modelSettings') {
         const row = (await controller.ensure(s)).find(row => row.id === r.id);
         if (!row) throw new KiroProblem('当前账号没有此 Kiro 模型。');
@@ -63,9 +76,12 @@ export function createInvoker({ controller, oauth, grants, edit, modelsChanged, 
         }
         await edit(current => {
           const rest = (current.modelDefaults ?? []).filter(d => d?.id !== r.id);
-          const next = { id: r.id, ...(r.effort ? { effort: r.effort } : {}), ...(r.maxTokens ? { maxTokens: r.maxTokens } : {}) };
-          return { ...current, modelDefaults: next.effort || next.maxTokens ? [...rest, next] : rest };
+          const next = { id: r.id, ...(r.effort ? { effort: r.effort } : {}), ...(r.maxTokens ? { maxTokens: r.maxTokens } : {}),
+            ...(r.contextTier ? { contextTier: r.contextTier } : {}) };
+          return { ...current, modelDefaults: next.effort || next.maxTokens || next.contextTier ? [...rest, next] : rest };
         });
+        // 上下文字段改变广告窗口：通知选择器目录刷新，但不失效持久化快照。
+        notifyModels?.();
       }
       await controller.ready;
       // 轻量读顺带触发后台补采（陈旧时），视图本身立即从存储返回，不等待上游。

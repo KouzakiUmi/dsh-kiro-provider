@@ -101,9 +101,8 @@ test('login validation fails locally; polling backs off without cancelling the t
   store.dispose();
 });
 
-test('pill injects the ModelDirectory instance, whose select writes the session effort', () => {
-  // select 是 ModelDirectory 实例方法，快照 store 只有 subscribe/getSnapshot；
-  // 注入本体而非 .store，否则档位切换在运行时 TypeError。
+test('pill injects the ModelDirectory instance and the RPC caller', () => {
+  // 药丸从 directory.store 读会话选择，经插件 RPC 写上下文档位；注入本体而非 .store。
   const fakeDirectory = {
     store: { subscribe: () => () => {}, getSnapshot: () => ({ current: null, status: 'idle', pending: null }) },
     select: async () => ({ ok: true, value: undefined }),
@@ -118,11 +117,12 @@ test('pill injects the ModelDirectory instance, whose select writes the session 
     },
   };
   const ctx = { inject: (names, fn) => { if (names.includes('modelDirectories')) fn(scope); } };
-  registerContextPill(ctx, async () => ({}));
+  const call = async () => ({});
+  registerContextPill(ctx, call);
   assert.equal(registered.meta.name, 'conversation.input.right');
   const props = registered.meta.inject('session-fixture');
   assert.equal(props.directory, fakeDirectory);
-  assert.equal(typeof props.directory.select, 'function');
+  assert.equal(props.call, call);
   assert.equal(typeof props.directory.store.subscribe, 'function');
   assert.equal(typeof props.directory.store.getSnapshot, 'function');
 });
@@ -178,6 +178,7 @@ test('kit and panels render without undefined identifiers (expanding stub)', () 
   rendered.UsagePanel({ state, store });
   rendered.UsagePanel({ state: { ...state, view: { ...fullView, usage: { supported: false } } }, store });
   rendered.AdvancedPanel({ state, store, formId: 'f' });
+  rendered.KiroContextPill({ directory: { store: { subscribe: () => () => {}, getSnapshot: () => ({ current: { provider: 'kiro-native', model: 'claude-sonnet-5.5' } }) } }, call: async () => fullView, sessionId: 's' });
   rendered.LoginPanel({ state, store, formId: 'f' });
   rendered.ConnectionPanel({ state, store, formId: 'f' });
   rendered.Settings({ client: { invoke: async () => fullView } });
@@ -215,6 +216,40 @@ test('model sorting, search and tab keyboard navigation are pure and bounded', (
   assert.equal(tabAfter('Home', 'advanced'), 'overview');
   assert.equal(tabAfter('End', 'overview'), 'advanced');
   assert.equal(tabAfter('Enter', 'overview'), null);
+});
+
+test('model settings writes carry the context tier and project optimistically', async () => {
+  const base = view({ models: [{ id: 'm', name: 'M', enabled: true, contextWindow: 1000000 }], modelDefaults: [{ id: 'm', effort: 'max' }] });
+  const calls = [];
+  const store = createKiroStore(async request => {
+    calls.push(request);
+    return { ...base, modelDefaults: [{ id: 'm', effort: 'max', contextTier: 'standard' }] };
+  });
+  await store.load();
+  const write = store.saveModelSettings('m', 'max', 0, 'standard');
+  assert.equal(store.getSnapshot().view.modelDefaults[0].contextTier, 'standard');
+  await write;
+  const sent = calls.find(c => c.op === 'modelSettings');
+  assert.deepEqual(sent, { op: 'modelSettings', id: 'm', effort: 'max', maxTokens: 0, contextTier: 'standard' });
+  assert.equal(store.getSnapshot().view.modelDefaults[0].contextTier, 'standard');
+  store.dispose();
+});
+
+test('pill context writes use field-level merge op and preserve other defaults', async () => {
+  const base = view({ models: [{ id: 'm', name: 'M', enabled: true, contextWindow: 1000000 }], modelDefaults: [{ id: 'm', effort: 'max', maxTokens: 4096 }] });
+  const calls = [];
+  const store = createKiroStore(async request => {
+    calls.push(request);
+    return { ...base, modelDefaults: [{ id: 'm', effort: 'max', maxTokens: 4096, contextTier: 'standard' }] };
+  });
+  await store.load();
+  const write = store.setContextTier('m', 'standard');
+  assert.equal(store.getSnapshot().view.modelDefaults[0].contextTier, 'standard');
+  assert.equal(store.getSnapshot().view.modelDefaults[0].effort, 'max');
+  await write;
+  const sent = calls.find(c => c.op === 'modelContext');
+  assert.deepEqual(sent, { op: 'modelContext', id: 'm', contextTier: 'standard' });
+  store.dispose();
 });
 
 test('restore recommended clears overrides and projects legacy models off', async () => {

@@ -32,7 +32,18 @@ const WRITE_PROJECT = {
   modelSettings: (view, r) => ({
     ...view,
     modelDefaults: [...view.modelDefaults.filter(d => d.id !== r.id),
-      ...(r.effort || r.maxTokens ? [{ id: r.id, ...(r.effort ? { effort: r.effort } : {}), ...(r.maxTokens ? { maxTokens: r.maxTokens } : {}) }] : [])],
+      ...(r.effort || r.maxTokens || r.contextTier ? [{ id: r.id, ...(r.effort ? { effort: r.effort } : {}), ...(r.maxTokens ? { maxTokens: r.maxTokens } : {}),
+        ...(r.contextTier ? { contextTier: r.contextTier } : {}) }] : [])],
+  }),
+  modelContext: (view, r) => ({
+    ...view,
+    modelDefaults: [...view.modelDefaults.filter(d => d.id !== r.id),
+      ...(() => {
+        const prev = view.modelDefaults.find(d => d.id === r.id);
+        const next = { id: r.id, ...(prev?.effort ? { effort: prev.effort } : {}), ...(prev?.maxTokens ? { maxTokens: prev.maxTokens } : {}),
+          ...(r.contextTier ? { contextTier: r.contextTier } : {}) };
+        return next.effort || next.maxTokens || next.contextTier ? [next] : [];
+      })()],
   }),
   advanced: (view, r) => ({ ...view, advanced: { quotaRefreshSeconds: r.quotaRefreshSeconds, streamIdleTimeoutMs: r.streamIdleTimeoutMs, maxRequestImageBytes: r.maxRequestImageBytes, autoOpenBrowser: r.autoOpenBrowser } }),
   recommend: view => {
@@ -189,7 +200,8 @@ export function createKiroStore(call) {
     retry: () => perform({ op: 'status' }),
     saveConnection: draft => perform({ op: 'connection', ...draft }, 'connection'),
     toggleModel: (id, enabled) => perform({ op: 'model', id, enabled }, `model:${id}`),
-    saveModelSettings: (id, effort, maxTokens) => perform({ op: 'modelSettings', id, effort, maxTokens }, `model:${id}`),
+    saveModelSettings: (id, effort, maxTokens, contextTier) => perform({ op: 'modelSettings', id, effort, maxTokens, contextTier }, `model:${id}`),
+    setContextTier: (id, contextTier) => perform({ op: 'modelContext', id, contextTier }, `model:${id}`),
     saveAdvanced: draft => perform({ op: 'advanced', ...draft }, 'advanced'),
     restoreRecommended: () => perform({ op: 'recommend' }, 'catalog'),
     setNotice: notice => publish({ notice }),

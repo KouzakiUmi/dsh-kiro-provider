@@ -66,6 +66,7 @@ test('settings responses validate the full view and distinguish connection check
   assert.throws(() => readSettingsReply(wrap(view({ catalogSource: 'cloud' })), 'status'), /设置数据不完整/);
   assert.throws(() => readSettingsReply(wrap(view({ usage: { supported: 'yes' } })), 'status'), /设置数据不完整/);
   assert.throws(() => readSettingsReply(wrap(view({ modelDefaults: [{ id: 'm', effort: 'ultra' }] })), 'status'), /设置数据不完整/);
+  assert.throws(() => readSettingsReply(wrap(view({ modelDefaults: [{ id: 'm', contextTier: 'ultra' }] })), 'status'), /设置数据不完整/);
   assert.throws(() => readSettingsReply(wrap(view({ models: [{ id: 'm', name: 'M', enabled: true, creditRate: -1 }] })), 'status'), /设置数据不完整/);
   const detected = { mode: 'direct', cliVersion: null, modelCount: 2 };
   assert.deepEqual(readSettingsReply(wrap(detected), 'detect'), detected);
@@ -76,9 +77,16 @@ test('request parsing covers usage and per-model settings within bounds', () => 
   assert.deepEqual(parseRequest({ op: 'usage' }), { op: 'usage' });
   assert.deepEqual(parseRequest({ op: 'recommend' }), { op: 'recommend' });
   assert.deepEqual(parseRequest({ op: 'modelSettings', id: 'claude-sonnet-5.5', effort: 'high', maxTokens: 4096 }),
-    { op: 'modelSettings', id: 'claude-sonnet-5.5', effort: 'high', maxTokens: 4096 });
-  assert.deepEqual(parseRequest({ op: 'modelSettings', id: 'm' }), { op: 'modelSettings', id: 'm', effort: '', maxTokens: 0 });
+    { op: 'modelSettings', id: 'claude-sonnet-5.5', effort: 'high', maxTokens: 4096, contextTier: '' });
+  assert.deepEqual(parseRequest({ op: 'modelSettings', id: 'm' }), { op: 'modelSettings', id: 'm', effort: '', maxTokens: 0, contextTier: '' });
+  assert.deepEqual(parseRequest({ op: 'modelSettings', id: 'm', contextTier: 'extended' }),
+    { op: 'modelSettings', id: 'm', effort: '', maxTokens: 0, contextTier: 'extended' });
   assert.throws(() => parseRequest({ op: 'modelSettings', id: 'm', effort: 'ultra' }));
+  assert.throws(() => parseRequest({ op: 'modelSettings', id: 'm', contextTier: 'ultra' }));
+  assert.deepEqual(parseRequest({ op: 'modelContext', id: 'm', contextTier: 'standard' }), { op: 'modelContext', id: 'm', contextTier: 'standard' });
+  assert.deepEqual(parseRequest({ op: 'modelContext', id: 'm', contextTier: '' }), { op: 'modelContext', id: 'm', contextTier: '' });
+  assert.throws(() => parseRequest({ op: 'modelContext', id: 'm', contextTier: 'ultra' }));
+  assert.throws(() => parseRequest({ op: 'modelContext', id: 'm' }));
   assert.throws(() => parseRequest({ op: 'modelSettings', id: 'm', maxTokens: 2_000_000 }));
   assert.throws(() => parseRequest({ op: 'modelSettings', id: '--bad' }));
   assert.deepEqual(parseRequest({ op: 'advanced', autoOpenBrowser: true, quotaRefreshSeconds: 120, streamIdleTimeoutMs: 240000, maxRequestImageBytes: 5000000 }),
@@ -100,7 +108,8 @@ test('service model/recommend/modelSettings ops write the override arrays correc
     run: async () => ({ code: 0, stdout: JSON.stringify(catalog) }),
   } });
   const invoke = createInvoker({ controller, oauth: { pending: () => false }, grants: { connected: async () => false },
-    edit: async fn => { config = fn(config); }, modelsChanged: () => {}, canEdit: () => true });
+    edit: async fn => { config = fn(config); }, modelsChanged: () => {}, notifyModels: () => { notified += 1; }, canEdit: () => true });
+  let notified = 0;
   await controller.ready;
   assert.equal((await invoke({ op: 'refresh' })).ok, true);
   // 开启旧版 → 写入 enabledModels，与 disabledModels 互斥。
@@ -114,10 +123,18 @@ test('service model/recommend/modelSettings ops write the override arrays correc
   assert.equal((await invoke({ op: 'recommend' })).ok, true);
   assert.deepEqual(config.enabledModels, []);
   assert.deepEqual(config.disabledModels, []);
-  // 模型默认设置按目录校验后写入。
+  // 模型默认设置按目录校验后写入；上下文档位写入并通知选择器刷新。
   assert.equal((await invoke({ op: 'modelSettings', id: 'claude-sonnet-5.5', effort: 'max', maxTokens: 0 })).ok, true);
   assert.deepEqual(config.modelDefaults, [{ id: 'claude-sonnet-5.5', effort: 'max' }]);
+  assert.equal((await invoke({ op: 'modelSettings', id: 'claude-sonnet-5.5', effort: 'max', maxTokens: 0, contextTier: 'extended' })).ok, true);
+  assert.deepEqual(config.modelDefaults, [{ id: 'claude-sonnet-5.5', effort: 'max', contextTier: 'extended' }]);
+  assert.ok(notified > 0);
   assert.equal((await invoke({ op: 'modelSettings', id: 'claude-sonnet-5.5', effort: 'xhigh', maxTokens: 0 })).ok, false);
+  // modelContext 字段级合并：只动 contextTier，保留配置中已有的 effort/maxTokens。
+  assert.equal((await invoke({ op: 'modelContext', id: 'claude-sonnet-5.5', contextTier: 'standard' })).ok, true);
+  assert.deepEqual(config.modelDefaults, [{ id: 'claude-sonnet-5.5', effort: 'max', contextTier: 'standard' }]);
+  assert.equal((await invoke({ op: 'modelContext', id: 'claude-sonnet-5.5', contextTier: '' })).ok, true);
+  assert.deepEqual(config.modelDefaults, [{ id: 'claude-sonnet-5.5', effort: 'max' }]);
   controller.dispose();
   store.dispose();
 });

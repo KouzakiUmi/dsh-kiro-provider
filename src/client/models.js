@@ -47,16 +47,18 @@ function ModelRow({ model, defaults, busy, store }) {
   const [open, setOpen] = React.useState(false);
   const [effort, setEffort] = React.useState(defaults?.effort ?? '');
   const [maxTokens, setMaxTokens] = React.useState(defaults?.maxTokens ? String(defaults.maxTokens) : '');
+  const [contextTier, setContextTier] = React.useState(defaults?.contextTier ?? '');
 
   React.useEffect(() => {
     setEffort(defaults?.effort ?? '');
     setMaxTokens(defaults?.maxTokens ? String(defaults.maxTokens) : '');
-  }, [defaults?.effort, defaults?.maxTokens]);
+    setContextTier(defaults?.contextTier ?? '');
+  }, [defaults?.effort, defaults?.maxTokens, defaults?.contextTier]);
 
   const range = model.maxTokenRange;
   const tokens = maxTokens.trim() === '' ? 0 : Number(maxTokens);
   const tokensValid = Number.isSafeInteger(tokens) && tokens >= 0 && (!tokens || (range && tokens >= range.min && tokens <= range.max));
-  const unchanged = effort === (defaults?.effort ?? '') && tokens === (defaults?.maxTokens ?? 0);
+  const unchanged = effort === (defaults?.effort ?? '') && tokens === (defaults?.maxTokens ?? 0) && contextTier === (defaults?.contextTier ?? '');
   const displayName = readableModelName(model.id, model.name);
   const badge = modelRateBadge(model.creditRate);
   const tags = [
@@ -71,6 +73,10 @@ function ModelRow({ model, defaults, busy, store }) {
     switchControl: h(Switch, { checked: model.enabled, disabled: busy, label: `启用 ${displayName}`, onChange: () => void store.toggleModel(model.id, !model.enabled) }),
     moreLabel: '默认设置', expanded: open, onToggle: () => setOpen(value => !value),
     detail: h('div', { className: 'kiro-form' },
+      h('label', { className: 'kiro-field' }, '上下文容量',
+        h('select', { className: 'kiro-select', value: contextTier, disabled: busy || !model.contextWindow, onChange: event => setContextTier(event.target.value) },
+          h('option', { value: '' }, `默认${model.contextWindow ? `（${formatTokens(model.contextWindow)}）` : ''}`),
+          contextTierOptions(model.contextWindow ?? 0).map(id => h('option', { key: id, value: id }, formatTokens(CONTEXT_TIERS[id]))))),
       h('label', { className: 'kiro-field' }, '默认思考档位',
         h('select', { className: 'kiro-select', value: effort, disabled: busy || !model.efforts?.length, onChange: event => setEffort(event.target.value) },
           h('option', { value: '' }, '未设置'),
@@ -82,7 +88,7 @@ function ModelRow({ model, defaults, busy, store }) {
           onChange: event => setMaxTokens(event.target.value),
         })),
       h('div', { className: 'kiro-actions' },
-        button('保存默认设置', () => void store.saveModelSettings(model.id, effort, tokens), busy || unchanged || !tokensValid, 'primary')),
-      h('p', { className: 'kiro-muted' }, '默认设置只填充调用时未显式指定的参数；CLI 连接不支持输出上限。')),
+        button('保存默认设置', () => void store.saveModelSettings(model.id, effort, tokens, contextTier), busy || unchanged || !tokensValid, 'primary')),
+      h('p', { className: 'kiro-muted' }, '默认设置只填充调用时未显式指定的参数；上下文容量调整 DSH 的上下文预算（压缩），不改变上游请求；CLI 连接不支持输出上限。')),
   });
 }

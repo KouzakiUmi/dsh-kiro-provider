@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readableModelName, modelRateBadge, selectorRateBadge, legacyModelIds, supersededBy } from '../src/model-name.mjs';
+import { effectiveContextWindow, contextTierOptions, CONTEXT_TIERS } from '../src/remote.mjs';
 
 test('ID 格式显示名清理为可读品牌名，请求 ID 不受影响', () => {
   const cases = [
@@ -28,6 +29,21 @@ test('选择器徽标走核心 LlmModelInfo.badge 契约，未知不挂', () => 
   assert.deepEqual(selectorRateBadge(1.3), { text: { en: 'x1.30', zh: 'x1.30' }, tone: 'neutral' });
   assert.deepEqual(selectorRateBadge(0.06), { text: { en: 'x0.06', zh: 'x0.06' }, tone: 'neutral' });
   for (const bad of [0, -1, NaN, undefined, null, '1.3']) assert.equal(selectorRateBadge(bad), undefined);
+});
+
+test('上下文档位按原生窗口封顶，快捷档只列低于原生的', () => {
+  assert.equal(effectiveContextWindow(1000000, 'standard'), 256000);
+  assert.equal(effectiveContextWindow(1000000, 'extended'), 500000);
+  assert.equal(effectiveContextWindow(1000000, 'maximum'), 1000000);
+  assert.equal(effectiveContextWindow(1000000, ''), 1000000);
+  assert.equal(effectiveContextWindow(200000, 'maximum'), 200000);
+  assert.equal(effectiveContextWindow(200000, undefined), 200000);
+  assert.equal(effectiveContextWindow(0, 'standard'), undefined);
+  assert.equal(effectiveContextWindow(undefined, 'standard'), undefined);
+  assert.deepEqual(contextTierOptions(1000000), ['standard', 'extended']);
+  assert.deepEqual(contextTierOptions(500000), ['standard']);
+  assert.deepEqual(contextTierOptions(200000), []);
+  assert.deepEqual(CONTEXT_TIERS, { standard: 256000, extended: 500000, maximum: 1000000 });
 });
 
 test('旧版判定：已核实外部后继 + 同家族更高版本；变体与现役型号不受影响', () => {

@@ -20,7 +20,7 @@ export const Config = z.object({
   keyRef: z.string().default('KIRO_API_KEY').volatile(),
   disabledModels: z.array(z.string()).default([]).volatile(),
   enabledModels: z.array(z.string()).default([]).volatile(),
-  modelDefaults: z.array(z.object({ id: z.string(), effort: z.string().default(''), maxTokens: z.number().default(0) })).default([]).volatile(),
+  modelDefaults: z.array(z.object({ id: z.string(), effort: z.string().default(''), maxTokens: z.number().default(0), contextTier: z.string().default('') })).default([]).volatile(),
   quotaRefreshSeconds: z.number().default(60).volatile(),
   streamIdleTimeoutMs: z.number().default(180_000).volatile(),
   maxRequestImageBytes: z.number().default(10_000_000).volatile(),
@@ -69,7 +69,7 @@ export function apply(ctx, config) {
   } });
   ctx.on('dispose', oauth.dispose);
 
-  const invoke = createInvoker({ controller, oauth, grants, edit, modelsChanged, canEdit: () => Boolean(entry && ctx.get('configEditor')) });
+  const invoke = createInvoker({ controller, oauth, grants, edit, modelsChanged, notifyModels: () => ctx.emit('llm/adapters-updated'), canEdit: () => Boolean(entry && ctx.get('configEditor')) });
   ctx.inject(['typert'], scope => scope.effect(() => scope.typert.register({
     package: kiroRemote.package, face: 'host', schemas: [], model: { services: [], events: [], objects: [] }, invocations: kiroRemote.descriptors,
   })));

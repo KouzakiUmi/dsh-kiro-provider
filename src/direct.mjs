@@ -26,7 +26,7 @@ export function directFetch({ row, credential, tuning, fetcher, onFailure }) {
 
 export function directProfile(row, route, retryPolicy, tuning = {}) {
   const model = { id: row.id, name: row.name, api: 'anthropic-messages', provider: route, baseUrl: sdkOrigin,
-    input: row.inputModalities, output: ['text'], contextWindow: row.contextWindow, maxTokens: row.maxTokens,
+    input: row.inputModalities, output: ['text'], contextWindow: tuning.contextWindow ?? row.contextWindow, maxTokens: row.maxTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, reasoning: row.efforts.length > 0,
     thinkingLevelMap: Object.fromEntries(levels.map(level => [level, level === 'off' ? undefined : row.efforts.includes(level) ? level : null])),
     ...(row.efforts.length ? { compat: { forceAdaptiveThinking: true } } : {}),

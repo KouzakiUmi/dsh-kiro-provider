@@ -27,6 +27,20 @@ export function normalizeAdvanced(value) {
   return out;
 }
 
+// 上下文容量档位（参考 kxyai modelContextTiers 语义）：固定快捷档，按模型原生窗口封顶。
+// 只影响广告给 DSH 的上下文预算（压缩/计量），不改变上游请求参数。双端共用单一真源。
+export const CONTEXT_TIERS = { standard: 256_000, extended: 500_000, maximum: 1_000_000 };
+export const contextTierIds = Object.keys(CONTEXT_TIERS);
+
+export function effectiveContextWindow(native, tier) {
+  if (!Number.isSafeInteger(native) || native <= 0) return undefined;
+  const size = CONTEXT_TIERS[tier];
+  return size ? Math.min(native, size) : native;
+}
+
+// 低于原生窗口的快捷档才可选；等于/超过原生的档位与「默认」同值，不重复展示。
+export const contextTierOptions = native => contextTierIds.filter(id => CONTEXT_TIERS[id] < native);
+
 export function organizationInput(startUrl, awsRegion) {
   const region = typeof awsRegion === 'string' ? awsRegion.trim() : '';
   const invalid = '请输入组织提供的 AWS HTTPS Start URL 和商业区 Region，例如 us-east-1。';
@@ -63,9 +77,16 @@ export function parseRequest(value) {
   if (value.op === 'modelSettings' && typeof value.id === 'string' && idPattern.test(value.id)) {
     const effort = value.effort ?? '';
     const maxTokens = value.maxTokens ?? 0;
-    if ((effort === '' || effortSet.has(effort)) && (maxTokens === 0 || (positive(maxTokens) && maxTokens <= 1_000_000))) {
-      return { op: value.op, id: value.id, effort, maxTokens };
+    const contextTier = value.contextTier ?? '';
+    if ((effort === '' || effortSet.has(effort)) && (maxTokens === 0 || (positive(maxTokens) && maxTokens <= 1_000_000))
+      && (contextTier === '' || contextTierIds.includes(contextTier))) {
+      return { op: value.op, id: value.id, effort, maxTokens, contextTier };
     }
+  }
+  // 药丸专用：只写上下文档位，service 端字段级合并，不回填可能陈旧的 effort/maxTokens。
+  if (value.op === 'modelContext' && typeof value.id === 'string' && idPattern.test(value.id)
+    && (value.contextTier === '' || contextTierIds.includes(value.contextTier))) {
+    return { op: value.op, id: value.id, contextTier: value.contextTier };
   }
   if (value.op === 'advanced') {
     const entries = Object.entries(ADVANCED_BOUNDS);
@@ -118,7 +139,8 @@ function advancedView(value) {
 
 function defaultsView(value) {
   return Array.isArray(value) && value.length <= 500 && value.every(d => record(d) && typeof d.id === 'string' && idPattern.test(d.id)
-    && (d.effort === undefined || effortSet.has(d.effort)) && (d.maxTokens === undefined || positive(d.maxTokens)));
+    && (d.effort === undefined || effortSet.has(d.effort)) && (d.maxTokens === undefined || positive(d.maxTokens))
+    && (d.contextTier === undefined || contextTierIds.includes(d.contextTier)));
 }
 
 export function readSettingsReply(reply, op) {
