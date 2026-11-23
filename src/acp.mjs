@@ -70,6 +70,8 @@ export class AcpConnection {
       }
       if (message.method === 'session/update') {
         for (const notify of this.#listeners) notify(message.params);
+      } else if (message.method === '_kiro.dev/metadata' && isRecord(message.params)) {
+        for (const notify of this.#listeners) notify({ ...message.params, _notification: message.method });
       }
       return;
     }

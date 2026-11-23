@@ -24,5 +24,6 @@ export function apply(ctx) {
     label: () => 'Kiro Provider', inject: () => ({ client }),
   }, Settings));
   registerContextPill(ctx, client.invoke);
+  registerUsagePill(ctx, client.invoke);
   ctx.effect(() => () => { disposed = true; unmount?.(); });
 }

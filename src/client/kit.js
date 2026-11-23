@@ -11,13 +11,21 @@ export const Section = ({ title, summary, actions, children }) => h('section', {
 
 export const ListBox = ({ children }) => h('div', { className: 'kiro-list' }, children);
 
+export const StatusBanner = ({ tone = 'neutral', icon = 'i', title, subtitle, action }) =>
+  h('div', { className: 'kiro-banner', 'data-tone': tone },
+    h('span', { className: 'kiro-banner-icon', 'aria-hidden': 'true' }, icon),
+    h('div', { className: 'kiro-banner-copy' },
+      h('span', { className: 'kiro-banner-title' }, title),
+      subtitle ? h('span', { className: 'kiro-banner-sub' }, subtitle) : null),
+    action ?? null);
+
 export const Switch = ({ checked, disabled, label, onChange }) => h('button', {
   type: 'button', className: 'kiro-switch', role: 'switch', disabled,
   'aria-checked': checked, 'aria-label': label, onClick: onChange,
 }, h('span', { className: 'kiro-switch-knob', 'aria-hidden': 'true' }));
 
-// 列表行：主体（名称 + 徽标 + 副行）| 开关 | 展开明细。
-export const Row = ({ name, tags, meta, switchControl, moreLabel, expanded, onToggle, detail, off }) =>
+// 列表行：主体（名称 + 徽标 + 副行）| 右侧控件 / 开关 | 展开明细。
+export const Row = ({ name, tags, meta, control, switchControl, moreLabel, expanded, onToggle, detail, off }) =>
   h('div', { className: 'kiro-row', 'data-off': off ? 'true' : undefined },
     h('div', { className: 'kiro-row-main' },
       h('div', { className: 'kiro-row-copy' },
@@ -25,9 +33,13 @@ export const Row = ({ name, tags, meta, switchControl, moreLabel, expanded, onTo
           h('span', { className: 'kiro-row-name', title: name }, name),
           tags),
         meta === undefined ? null : h('span', { className: 'kiro-row-meta' }, meta))),
-    switchControl === undefined ? null : switchControl,
-    moreLabel === undefined ? null
-      : h('button', { type: 'button', className: 'kiro-more', 'aria-expanded': expanded, 'aria-label': `${name} 的更多操作`, onClick: onToggle }, expanded ? '收起' : moreLabel),
+    (control !== undefined || switchControl !== undefined || moreLabel !== undefined)
+      ? h('div', { className: 'kiro-row-control' },
+        control ?? null,
+        switchControl ?? null,
+        moreLabel === undefined ? null
+          : h('button', { type: 'button', className: 'kiro-more', 'aria-expanded': expanded, 'aria-label': `${name} 的更多操作`, onClick: onToggle }, expanded ? '收起' : moreLabel))
+      : null,
     expanded && detail ? h('div', { className: 'kiro-row-detail' }, detail) : null);
 
 export const Chip = ({ tone, title, children }) => h('span', { className: 'kiro-chip', 'data-tone': tone, title }, children);
@@ -40,10 +52,19 @@ export const EmptyState = ({ loading, failed, onRetry, disabled, emptyText, load
   return h('p', { className: 'kiro-empty' }, emptyText);
 };
 
-export const Meter = ({ percent, label }) => h('div', {
-  className: 'kiro-meter', role: 'progressbar', 'aria-label': label,
-  'aria-valuenow': Math.round(Math.min(100, percent)), 'aria-valuemin': 0, 'aria-valuemax': 100,
-}, h('span', { className: 'kiro-meter-fill', 'data-high': percent >= 90 || undefined, 'data-full': percent >= 100 || undefined, style: { width: `${Math.min(100, Math.max(0, percent))}%` } }));
+export const Meter = ({ percent, tone, label }) => {
+  const clamped = Math.round(Math.min(100, Math.max(0, Number.isFinite(percent) ? percent : 0)));
+  return h('div', {
+    className: 'kiro-meter', role: 'progressbar', 'aria-label': label,
+    'aria-valuenow': clamped, 'aria-valuemin': 0, 'aria-valuemax': 100,
+  }, h('span', {
+    className: 'kiro-meter-fill',
+    'data-tone': tone || undefined,
+    'data-high': !tone && percent >= 90 || undefined,
+    'data-full': !tone && percent >= 100 || undefined,
+    style: { width: `${clamped}%` },
+  }));
+};
 
 // 活倒计时语义元素：父级提供时钟 now，到点重渲染由面板负责。
 export const RelativeDeadline = ({ at, prefix, now = Date.now() }) => {
@@ -53,11 +74,16 @@ export const RelativeDeadline = ({ at, prefix, now = Date.now() }) => {
 };
 
 // 数值字段：整数 + 区间校验，错误就地提示（失焦保留草稿，由保存按钮提交）。
-export function NumberField({ id, label, value, min, max, disabled, onChange }) {
+export function NumberField({ id, label, value, min, max, disabled, compact, onChange }) {
   const numeric = Number(value);
   const invalid = String(value).trim() !== '' && (!Number.isSafeInteger(numeric) || numeric < min || numeric > max);
-  return h('label', { className: 'kiro-field', htmlFor: id }, label,
-    h('input', { id, className: 'kiro-input', type: 'number', inputMode: 'numeric', value, min, max, disabled, onChange: event => onChange(event.target.value) }),
+  return h('label', { className: compact ? 'kiro-field-inline' : 'kiro-field', htmlFor: id },
+    label ? h('span', null, label) : null,
+    h('input', {
+      id, className: compact ? 'kiro-input kiro-input-sm' : 'kiro-input',
+      type: 'number', inputMode: 'numeric', value, min, max, disabled,
+      onChange: event => onChange(event.target.value),
+    }),
     invalid && h('span', { className: 'kiro-field-error', role: 'alert' }, `须为 ${min}–${max} 的整数`));
 }
 

@@ -26,18 +26,29 @@ export function ConnectionPanel({ state, store, formId }) {
   };
 
   return h('details', { className: 'kiro-details', open, onToggle: event => setOpen(event.currentTarget.open) },
-    h('summary', null, '其他登录方式'),
-    h('form', { className: 'kiro-form', onSubmit: event => { event.preventDefault(); void store.saveConnection(draft); } },
-      h('label', { className: 'kiro-field', htmlFor: `${formId}-mode` }, '连接方式',
-        h('select', { id: `${formId}-mode`, className: 'kiro-select', value: draft.mode, disabled: Boolean(busy.connection), onChange: event => setMode(event.target.value) },
-          Object.entries(MODE_LABELS).map(([mode, label]) => h('option', { key: mode, value: mode }, label)))),
-      draft.mode === 'direct' && h('label', { className: 'kiro-field', htmlFor: `${formId}-region` }, 'Kiro 区域',
-        h('select', { id: `${formId}-region`, className: 'kiro-select', value: draft.region, disabled: Boolean(busy.connection), onChange: event => setDraft({ ...draft, region: event.target.value }) },
-          h('option', { value: 'us-east-1' }, '美国东部 · us-east-1'),
-          h('option', { value: 'eu-central-1' }, '欧洲中部 · eu-central-1'))),
-      ['key', 'direct', 'session'].includes(draft.mode) && h('label', { className: 'kiro-field', htmlFor: `${formId}-key` }, '凭据引用名',
-        h('input', { id: `${formId}-key`, className: 'kiro-input', type: 'text', value: draft.keyRef, pattern: '[A-Za-z_][A-Za-z0-9_]{0,95}', title: '输入 DSH 凭据名称', required: true, disabled: Boolean(busy.connection), onChange: event => setDraft({ ...draft, keyRef: event.target.value }) })),
-      h('p', { className: 'kiro-muted' }, hints[draft.mode]),
-      h('div', { className: 'kiro-actions' },
+    h('summary', null, `其他连接方式（API Key / 会话 / CLI） · 当前：${MODE_LABELS[view.mode] ?? view.mode}`),
+    h('form', {
+      onSubmit: event => { event.preventDefault(); void store.saveConnection(draft); },
+    },
+      h(ListBox, null,
+        h(Row, {
+          name: '连接方式',
+          meta: hints[draft.mode],
+          control: h('select', { id: `${formId}-mode`, className: 'kiro-select', value: draft.mode, disabled: Boolean(busy.connection), onChange: event => setMode(event.target.value) },
+            Object.entries(MODE_LABELS).map(([mode, label]) => h('option', { key: mode, value: mode }, label))),
+        }),
+        draft.mode === 'direct' && h(Row, {
+          name: 'Kiro 区域',
+          meta: 'API Key 直连服务区域',
+          control: h('select', { id: `${formId}-region`, className: 'kiro-select', value: draft.region, disabled: Boolean(busy.connection), onChange: event => setDraft({ ...draft, region: event.target.value }) },
+            h('option', { value: 'us-east-1' }, '美国东部 · us-east-1'),
+            h('option', { value: 'eu-central-1' }, '欧洲中部 · eu-central-1')),
+        }),
+        ['key', 'direct', 'session'].includes(draft.mode) && h(Row, {
+          name: '凭据引用名',
+          meta: '在 DSH 凭据管理中保存对应凭据后的键名',
+          control: h('input', { id: `${formId}-key`, className: 'kiro-input kiro-input-sm', type: 'text', value: draft.keyRef, pattern: '[A-Za-z_][A-Za-z0-9_]{0,95}', title: '输入 DSH 凭据名称', required: true, disabled: Boolean(busy.connection), onChange: event => setDraft({ ...draft, keyRef: event.target.value }) }),
+        })),
+      h('div', { className: 'kiro-actions', style: { marginTop: '10px', justifyContent: 'flex-end' } },
         h('button', { type: 'submit', className: 'kiro-button is-primary', disabled: Boolean(busy.connection) || Boolean(busy.login) || unchanged }, '保存连接方式'))));
 }

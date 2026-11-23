@@ -16,7 +16,7 @@ const clientModule = factory(name => {
   assert.equal(name, 'react');
   return reactStub;
 });
-const { createKiroStore, normalizeLogin, registerContextPill } = clientModule;
+const { createKiroStore, normalizeLogin, registerContextPill, registerUsagePill } = clientModule;
 
 const view = overrides => ({
   mode: 'oauth', keyRef: 'KIRO_API_KEY', region: 'us-east-1', oauthConnected: false,
@@ -179,6 +179,7 @@ test('kit and panels render without undefined identifiers (expanding stub)', () 
   rendered.UsagePanel({ state: { ...state, view: { ...fullView, usage: { supported: false } } }, store });
   rendered.AdvancedPanel({ state, store, formId: 'f' });
   rendered.KiroContextPill({ directory: { store: { subscribe: () => () => {}, getSnapshot: () => ({ current: { provider: 'kiro-native', model: 'claude-sonnet-5.5' } }) } }, call: async () => fullView, sessionId: 's' });
+  rendered.KiroUsagePill({ directory: { store: { subscribe: () => () => {}, getSnapshot: () => ({ current: { provider: 'kiro-native', model: 'claude-sonnet-5.5' } }) } }, call: async () => fullView, sessionId: 's' });
   rendered.LoginPanel({ state, store, formId: 'f' });
   rendered.ConnectionPanel({ state, store, formId: 'f' });
   rendered.Settings({ client: { invoke: async () => fullView } });
@@ -347,4 +348,320 @@ test('silent reads skip while writes are in flight and never touch notices', asy
   await store.pollRead();
   assert.equal(store.getSnapshot().view.catalogAt, 9);
   store.dispose();
+});
+
+test('usage pill registers conversation.input.right slot and hides for non-kiro providers', () => {
+  const fakeDirectory = {
+    store: { subscribe: () => () => {}, getSnapshot: () => ({ current: { provider: 'openai', model: 'gpt-5' } }) },
+  };
+  let registered;
+  const scope = {
+    modelDirectories: { directoryFor: () => fakeDirectory },
+    effect: fn => fn(),
+    slots: {
+      inject: (_owner, register) => register(),
+      register: (meta, component) => { registered = { meta, component }; },
+    },
+  };
+  const ctx = { inject: (names, fn) => { if (names.includes('modelDirectories')) fn(scope); } };
+  const call = async () => view();
+  registerUsagePill(ctx, call);
+  assert.equal(registered.meta.name, 'conversation.input.right');
+  assert.equal(registered.meta.id, 'kiro-provider-quota');
+  assert.equal(registered.meta.order, 1002);
+  const props = registered.meta.inject('s-1');
+  assert.equal(props.directory, fakeDirectory);
+  assert.equal(props.call, call);
+
+  const expandStub = {
+    createElement: (type, p, ...c) => typeof type === 'function' ? type({ ...(p ?? {}), children: c.length === 1 ? c[0] : c }) : { type, props: { ...(p ?? {}), children: c } },
+    useState: init => [typeof init === 'function' ? init() : init, () => {}],
+    useEffect: () => {},
+    useRef: init => ({ current: init }),
+    useCallback: fn => fn,
+    useSyncExternalStore: (_sub, get) => get(),
+    Fragment: 'Fragment',
+  };
+  const { KiroUsagePill } = factory(() => expandStub);
+  assert.equal(KiroUsagePill({ directory: fakeDirectory, call, sessionId: 's-1' }), null);
+});
+
+test('usage pill displays proportional remaining bars, warns cleanly, opens popover, and refreshes via op=usage', async () => {
+  const slots = [];
+  const effectDeps = [];
+  const cleanups = [];
+  let pending = [];
+  let cursor = 0;
+
+  const sameDeps = (a, b) => a && b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+  const mount = (Component, props) => {
+    const step = () => {
+      cursor = 0;
+      const tree = harness.createElement(Component, props);
+      const run = pending;
+      pending = [];
+      for (const [slotIdx, fn] of run) {
+        if (cleanups[slotIdx]) { cleanups[slotIdx](); cleanups[slotIdx] = undefined; }
+        cleanups[slotIdx] = fn();
+      }
+      return tree;
+    };
+    return {
+      render: step,
+      settle: async () => {
+        for (let i = 0; i < 4; i++) {
+          await new Promise(r => setImmediate(r));
+          step();
+        }
+        return step();
+      },
+      unmount: () => { for (const c of cleanups) c?.(); },
+    };
+  };
+
+  const harness = {
+    createElement: (type, p, ...children) => {
+      const merged = { ...(p ?? {}), children: children.length === 1 ? children[0] : children };
+      if (typeof type === 'function') return type(merged);
+      return { type, props: merged };
+    },
+    useState: init => {
+      const i = cursor++;
+      if (!(i in slots)) slots[i] = typeof init === 'function' ? init() : init;
+      return [slots[i], next => { slots[i] = typeof next === 'function' ? next(slots[i]) : next; }];
+    },
+    useRef: init => {
+      const i = cursor++;
+      if (!(i in slots)) slots[i] = { current: init };
+      return slots[i];
+    },
+    useCallback: (fn, deps) => {
+      const i = cursor++;
+      if (!slots[i] || !sameDeps(slots[i].deps, deps)) slots[i] = { fn, deps };
+      return slots[i].fn;
+    },
+    useSyncExternalStore: (_sub, get) => get(),
+    useEffect: (fn, deps) => {
+      const i = cursor++;
+      if (!effectDeps[i] || !deps || !sameDeps(effectDeps[i], deps)) {
+        effectDeps[i] = deps;
+        pending.push([i, fn]);
+      }
+    },
+    Fragment: 'Fragment',
+  };
+
+  const find = (node, pred) => {
+    if (!node || typeof node !== 'object') return null;
+    if (Array.isArray(node)) {
+      for (const item of node) { const hit = find(item, pred); if (hit) return hit; }
+      return null;
+    }
+    if (pred(node)) return node;
+    return node.props?.children !== undefined ? find(node.props.children, pred) : null;
+  };
+  const collectText = node => {
+    if (node == null || typeof node === 'boolean') return '';
+    if (typeof node === 'string' || typeof node === 'number') return String(node);
+    if (Array.isArray(node)) return node.map(collectText).join('');
+    if (typeof node === 'object' && node.props?.children !== undefined) return collectText(node.props.children);
+    return '';
+  };
+
+  const { KiroUsagePill } = factory(() => harness);
+  const ops = [];
+  let snap = view({
+    oauthConnected: true,
+    usage: {
+      supported: true, plan: 'Kiro Pro', user: 'dev@example.com',
+      windows: [{ kind: 'plan', name: 'Credits', used: 80, limit: 100, percent: 80, resetsAt: '2026-12-01T00:00:00.000Z' }],
+      at: Date.now() - 30_000, stale: false, autoRefreshPaused: false, refreshFailures: 0,
+    },
+  });
+  let currentProvider = 'kiro-native';
+  const directory = {
+    store: {
+      subscribe: () => () => {},
+      getSnapshot: () => ({ current: { provider: currentProvider, model: 'claude-sonnet-5.5' } }),
+    },
+  };
+  let usageHandler = async () => {
+    snap = view({
+      oauthConnected: true,
+      usage: {
+        supported: true, plan: 'Kiro Pro', user: 'dev@example.com',
+        windows: [{ kind: 'plan', name: 'Credits', used: 100, limit: 100, percent: 100, resetsAt: '2026-12-01T00:00:00.000Z' }],
+        at: Date.now(), stale: false, autoRefreshPaused: false, refreshFailures: 0,
+      },
+    });
+    return snap;
+  };
+  const call = async req => {
+    ops.push(req.op);
+    if (req.op === 'usage') return usageHandler();
+    return snap;
+  };
+
+  const mounted = mount(KiroUsagePill, { directory, call, sessionId: 's-quota' });
+  try {
+    let tree = await mounted.settle();
+    assert.ok(ops.includes('status'));
+    const trigger = find(tree, n => n.props?.className === 'kiro-quota-trigger');
+    assert.ok(trigger);
+    assert.equal(trigger.props['data-tinted'], 'true');
+    const barFill = find(trigger, n => n.props?.className === 'kiro-quota-mini-fill');
+    assert.equal(barFill.props.style.width, '20%');
+    assert.match(collectText(trigger), /偏少/);
+    assert.equal(find(tree, n => n.props?.role === 'dialog'), null);
+
+    // Open popover and verify UsageSummary + refresh action (100% -> 0% remaining + 已用尽).
+    trigger.props.onClick();
+    tree = await mounted.settle();
+    const dialog = find(tree, n => n.props?.role === 'dialog');
+    assert.ok(dialog);
+    assert.match(collectText(dialog), /Kiro · 额度/);
+    assert.match(collectText(dialog), /Kiro Pro/);
+    assert.match(collectText(dialog), /20%/);
+
+    const refreshBtn = find(dialog, n => n.props?.className === 'kiro-quota-refresh');
+    assert.equal(collectText(refreshBtn), '刷新额度');
+    refreshBtn.props.onClick();
+    tree = await mounted.settle();
+    assert.ok(ops.includes('usage'));
+    const updatedFill = find(tree, n => n.props?.className === 'kiro-quota-mini-fill');
+    assert.equal(updatedFill.props.style.width, '0%');
+    assert.match(collectText(find(tree, n => n.props?.className === 'kiro-quota-trigger')), /已用尽/);
+
+    // Refresh error preserves cached snapshot and displays error notice inside popover.
+    usageHandler = async () => { throw new Error('quota backend offline'); };
+    find(tree, n => n.props?.className === 'kiro-quota-refresh').props.onClick();
+    tree = await mounted.settle();
+    const dialogErr = find(tree, n => n.props?.role === 'dialog');
+    assert.match(collectText(dialogErr), /quota backend offline/);
+    assert.match(collectText(dialogErr), /Kiro Pro/);
+
+    // Unsupported CLI mode displays neutral account-page label and uses op=status to recheck.
+    usageHandler = async () => {
+      snap = view({ mode: 'cli', usage: { supported: false } });
+      return snap;
+    };
+    find(tree, n => n.props?.className === 'kiro-quota-refresh').props.onClick();
+    tree = await mounted.settle();
+    const cliTrigger = find(tree, n => n.props?.className === 'kiro-quota-trigger');
+    assert.equal(cliTrigger.props['data-short'], 'true');
+    assert.match(collectText(cliTrigger), /账户页/);
+    const cliDialog = find(tree, n => n.props?.role === 'dialog');
+    assert.match(collectText(cliDialog), /打开 Kiro 账户页/);
+    const cliRefresh = find(cliDialog, n => n.props?.className === 'kiro-quota-refresh');
+    assert.equal(collectText(cliRefresh), '刷新状态');
+    const opsBeforeCliRecheck = ops.length;
+    cliRefresh.props.onClick();
+    tree = await mounted.settle();
+    assert.equal(ops[opsBeforeCliRecheck], 'status');
+
+    // Close popover via close button and verify switching provider hides pill.
+    find(tree, n => n.props?.className === 'kiro-quota-close').props.onClick();
+    tree = mounted.render();
+    assert.equal(find(tree, n => n.props?.role === 'dialog'), null);
+    currentProvider = 'anthropic';
+    assert.equal(mounted.render(), null);
+  } finally {
+    mounted.unmount();
+  }
+});
+
+test('context pill renders a flat segmented group matching other plugins without redundant labels', async () => {
+  const slots = [];
+  const effectDeps = [];
+  const cleanups = [];
+  let pending = [];
+  let cursor = 0;
+  const sameDeps = (a, b) => a && b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+  const harness = {
+    createElement: (type, p, ...children) => {
+      const merged = { ...(p ?? {}), children: children.length === 1 ? children[0] : children };
+      return typeof type === 'function' ? type(merged) : { type, props: merged };
+    },
+    useState: init => {
+      const i = cursor++;
+      if (!(i in slots)) slots[i] = typeof init === 'function' ? init() : init;
+      return [slots[i], next => { slots[i] = typeof next === 'function' ? next(slots[i]) : next; }];
+    },
+    useRef: init => {
+      const i = cursor++;
+      if (!(i in slots)) slots[i] = { current: init };
+      return slots[i];
+    },
+    useCallback: (fn, deps) => {
+      const i = cursor++;
+      if (!slots[i] || !sameDeps(slots[i].deps, deps)) slots[i] = { fn, deps };
+      return slots[i].fn;
+    },
+    useSyncExternalStore: (_sub, get) => get(),
+    useEffect: (fn, deps) => {
+      const i = cursor++;
+      if (!effectDeps[i] || !deps || !sameDeps(effectDeps[i], deps)) {
+        effectDeps[i] = deps;
+        pending.push([i, fn]);
+      }
+    },
+    Fragment: 'Fragment',
+  };
+  const step = props => {
+    cursor = 0;
+    const tree = harness.createElement(KiroContextPill, props);
+    const run = pending;
+    pending = [];
+    for (const [idx, fn] of run) {
+      if (cleanups[idx]) { cleanups[idx](); cleanups[idx] = undefined; }
+      cleanups[idx] = fn();
+    }
+    return tree;
+  };
+  const { KiroContextPill } = factory(() => harness);
+  const calls = [];
+  let snap = view({
+    models: [{ id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6', enabled: true, efforts: [], contextWindow: 1_000_000 }],
+    modelDefaults: [],
+  });
+  const directory = {
+    store: {
+      subscribe: () => () => {},
+      getSnapshot: () => ({ current: { provider: 'kiro-native', model: 'claude-sonnet-4.6' } }),
+    },
+  };
+  const props = {
+    directory,
+    sessionId: 's-ctx',
+    call: async req => {
+      calls.push(req);
+      if (req.op === 'modelContext') {
+        snap = { ...snap, modelDefaults: req.contextTier ? [{ id: req.id, contextTier: req.contextTier }] : [] };
+      }
+      return snap;
+    },
+  };
+  try {
+    let tree;
+    for (let i = 0; i < 4; i++) {
+      await new Promise(r => setImmediate(r));
+      tree = step(props);
+    }
+    assert.equal(tree.props.className, 'kiro-pill');
+    assert.equal(tree.props.role, 'group');
+    const buttons = tree.props.children.flat();
+    assert.deepEqual(buttons.map(b => b.props.className), ['kiro-pill-tier', 'kiro-pill-tier', 'kiro-pill-tier']);
+    assert.deepEqual(buttons.map(b => b.props.children), ['256K', '500K', '1M']);
+    assert.deepEqual(buttons.map(b => b.props['aria-pressed']), [false, false, true]);
+
+    buttons[0].props.onClick();
+    for (let i = 0; i < 4; i++) {
+      await new Promise(r => setImmediate(r));
+      tree = step(props);
+    }
+    assert.deepEqual(calls.find(c => c.op === 'modelContext'), { op: 'modelContext', id: 'claude-sonnet-4.6', contextTier: 'standard' });
+    assert.deepEqual(tree.props.children.flat().map(b => b.props['aria-pressed']), [true, false, false]);
+  } finally {
+    for (const cleanup of cleanups) cleanup?.();
+  }
 });

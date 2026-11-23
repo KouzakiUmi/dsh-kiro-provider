@@ -22,7 +22,60 @@ export function quotaStatusView(usage, { oauthMode = false, connected = false } 
   return { kind, label: QUOTA_STATUS_LABELS[kind] };
 }
 
+const STATUS_ICON = { good: '✓', warn: '!', stale: '!', 'need-login': '!', danger: '!', critical: '×', error: '×', empty: 'i' };
+
 const windowName = window => window.kind === 'bonus' ? window.name : WINDOW_LABELS[window.kind] ?? window.name;
+const remainingTone = usedPercent => usedPercent >= 100 ? 'danger' : usedPercent >= 85 ? 'tight' : usedPercent >= 70 ? 'warn' : 'ok';
+
+function UsageSummary({ view, now }) {
+  const usage = view.usage;
+  if (!usage?.supported) {
+    return h(StatusBanner, {
+      tone: 'accent', icon: 'i', title: '经 Kiro CLI 对话',
+      subtitle: '该模式不在本地拉取额度窗口，可在官方账户页查看详细用量。',
+      action: h('a', { className: 'kiro-button is-sm', href: 'https://app.kiro.dev/', target: '_blank', rel: 'noreferrer' }, '打开 Kiro 账户页'),
+    });
+  }
+  const status = quotaStatusView(usage, { oauthMode: view.mode === 'oauth', connected: view.oauthConnected === true });
+  const windows = usage.windows ?? [];
+  const metaSummary = [usage.plan, usage.user].filter(Boolean).join(' · ') || 'Kiro credits';
+  const bannerTone = STATUS_TONE[status.kind] ?? 'neutral';
+
+  return h(React.Fragment, null,
+    h(StatusBanner, {
+      tone: bannerTone,
+      icon: STATUS_ICON[status.kind] ?? 'i',
+      title: status.label,
+      subtitle: `${metaSummary}${usage.at ? ` · 更新于 ${formatWhen(usage.at, now)}` : ''}`,
+    }),
+    usage.autoRefreshPaused && h(Notice, { kind: 'warn' }, '额度自动刷新已暂停（连续读取失败）。点击「刷新额度」恢复。'),
+    usage.error && h(Notice, { kind: 'warn' }, usage.error),
+    windows.length === 0
+      ? h(EmptyState, { emptyText: usage.at ? 'Kiro 未返回额度窗口。' : '尚未读取额度，点击刷新额度。' })
+      : h('div', { className: 'kiro-window-list' }, windows.map((window, index) => {
+        const name = windowName(window);
+        const leftPercent = Math.max(0, Math.min(100, Math.round(100 - (window.percent ?? 0))));
+        const tone = remainingTone(window.percent ?? 0);
+        const deadline = window.resetsAt ? { at: Date.parse(window.resetsAt), prefix: '重置：' }
+          : window.expiresAt ? { at: Date.parse(window.expiresAt), prefix: '到期：' } : null;
+        return h('div', {
+          key: `${window.kind}-${index}`, className: 'kiro-card',
+          'data-tone': tone === 'danger' ? 'danger' : undefined,
+          'data-aside': window.aside || undefined,
+        },
+          h('div', { className: 'kiro-card-head' },
+            h('div', null,
+              h('span', { className: 'kiro-card-name' }, name),
+              h('div', { className: 'kiro-card-sub' }, `已用 ${formatCredits(window.used)} / ${formatCredits(window.limit)}`)),
+            h('span', { className: 'kiro-card-pct' },
+              h('strong', null, `${leftPercent}%`),
+              h('small', null, '剩余'))),
+          h(Meter, { percent: leftPercent, tone, label: `${name} 剩余百分比` }),
+          h('div', { className: 'kiro-card-foot' },
+            deadline ? h(RelativeDeadline, { at: deadline.at, prefix: deadline.prefix, now }) : h('span', null, '周期额度'),
+            window.aside ? h('span', null, '套餐参考窗') : null));
+      })));
+}
 
 export function UsagePanel({ state, store }) {
   const { view, busy } = state;
@@ -49,32 +102,14 @@ export function UsagePanel({ state, store }) {
 
   if (!usage.supported) {
     return h(Section, { title: '额度', summary: '当前连接方式经 Kiro CLI 对话，额度在 Kiro 账户页查看。' },
-      h('p', { className: 'kiro-muted' }, h('a', { href: 'https://app.kiro.dev/', target: '_blank', rel: 'noreferrer' }, '打开 Kiro 账户页')));
+      h(UsageSummary, { view, now }));
   }
 
-  const status = quotaStatusView(usage, { oauthMode: view.mode === 'oauth', connected: view.oauthConnected === true });
-  const windows = usage.windows ?? [];
-  const summary = [usage.plan, usage.user].filter(Boolean).join(' · ') || 'Kiro credits';
   return h(Section, {
-    title: '额度', summary,
-    actions: h(React.Fragment, null,
-      h(Chip, { tone: STATUS_TONE[status.kind] }, status.label),
-      button('刷新额度', () => void store.refreshUsage(), Boolean(busy.usage) || Boolean(busy.catalog))),
+    title: '额度概览',
+    actions: button('刷新额度', () => void store.refreshUsage(), Boolean(busy.usage) || Boolean(busy.catalog), 'sm'),
   },
-    usage.autoRefreshPaused && h(Notice, { kind: 'warn' }, '额度自动刷新已暂停（连续读取失败）。点击「刷新额度」恢复。'),
-    usage.error && h(Notice, { kind: 'warn' }, usage.error),
-    windows.length === 0
-      ? h(EmptyState, { emptyText: usage.at ? 'Kiro 未返回额度窗口。' : '尚未读取额度，点击刷新额度。' })
-      : h('div', { className: 'kiro-cards' }, windows.map((window, index) => {
-        const name = windowName(window);
-        const deadline = window.resetsAt ? { at: Date.parse(window.resetsAt), prefix: '重置：' }
-          : window.expiresAt ? { at: Date.parse(window.expiresAt), prefix: '到期：' } : null;
-        return h('div', { key: `${window.kind}-${index}`, className: 'kiro-card', 'data-aside': window.aside || undefined },
-          h('span', { className: 'kiro-card-name' }, name),
-          h('span', { className: 'kiro-card-value' }, formatCredits(window.used), ' ', h('small', null, `/ ${formatCredits(window.limit)}`)),
-          h(Meter, { percent: window.percent, label: name }),
-          deadline && h(RelativeDeadline, { at: deadline.at, prefix: deadline.prefix, now }));
-      })),
+    h(UsageSummary, { view, now }),
     h('dl', { className: 'kiro-meta' },
       h('div', null, h('dt', null, '最近更新'), h('dd', null, usage.at ? formatWhen(usage.at, now) : '尚未读取')),
       h('div', null, h('dt', null, '下次自动刷新'), h('dd', null, usage.autoRefreshPaused ? '已暂停' : usage.nextRefreshAt ? h(RelativeDeadline, { at: usage.nextRefreshAt, now }) : '等待调度')),

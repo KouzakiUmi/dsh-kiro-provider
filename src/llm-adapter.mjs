@@ -16,10 +16,13 @@ function modelInfo(row, contextTier) {
     ...(row.efforts.length ? { reasoning: { efforts: row.efforts.map(id => ({ id: ReasoningEffortId(id), name: id })) } } : {}) };
 }
 
-export function adapterFor(controller, ctx) {
+export function adapterFor(controller, ctx, { generate: streamGenerate = generate } = {}) {
   const retryPolicy = resolveRetryPolicy({ mode: 'normal', maxRetries: 0 }, ROUTE);
   const sdk = anthropicMessagesApi();
   const credentials = new InMemoryCredentialStore();
+  // ACP `usage_update.size` supplies context capacities when CLI catalogs omit them.
+  const observedWindows = new Map();
+  const withWindow = row => row.contextWindow || !observedWindows.has(row.id) ? row : { ...row, contextWindow: observedWindows.get(row.id) };
   function nativeAdapter(s, row, tuning, onFailure) {
     const contextTier = s.modelDefaults.find(d => d.id === row.id)?.contextTier;
     const profile = directProfile(row, ROUTE, retryPolicy, { ...s.advanced, contextWindow: effectiveContextWindow(row.contextWindow, contextTier) });
@@ -78,7 +81,7 @@ export function adapterFor(controller, ctx) {
     }
     try {
       const target = await controller.target(s, signal);
-      yield* generate(target, { ...opts, signal });
+      yield* streamGenerate(target, { ...opts, signal });
     } catch (error) {
       if (signal.aborted) throw new LlmError('Kiro 请求已取消。', 'ABORTED');
       if (error instanceof KiroProblem) throw new LlmError(error.message, error.code);
@@ -95,14 +98,14 @@ export function adapterFor(controller, ctx) {
       controller.revalidate(s);
       return view.rows.filter(row => controller.modelEnabled(s, row.id)).map(row => {
         const badge = selectorRateBadge(row.creditRate);
-        return { ...modelInfo(row, s.modelDefaults.find(d => d.id === row.id)?.contextTier), ...(badge ? { badge } : {}) };
+        return { ...modelInfo(withWindow(row), s.modelDefaults.find(d => d.id === row.id)?.contextTier), ...(badge ? { badge } : {}) };
       });
     }
     async resolveModel(provider, id, signal) {
       const s = controller.snapshot();
       const row = await exact(s, id, signal);
       return directMode(s.mode) ? nativeAdapter(s, row).resolveModel(provider, id, signal)
-        : modelInfo(row, s.modelDefaults.find(d => d.id === id)?.contextTier);
+        : modelInfo(withWindow(row), s.modelDefaults.find(d => d.id === id)?.contextTier);
     }
     imageRequestPricing(provider, id) {
       const s = controller.snapshot();
@@ -124,10 +127,12 @@ export function adapterFor(controller, ctx) {
           return dispatchDirect(s, row, { ...options, reasoningEffort: effort, maxTokens });
         } };
       }
-      const model = modelInfo(row, s.modelDefaults.find(d => d.id === id)?.contextTier);
+      const effectiveRow = withWindow(row);
+      const model = modelInfo(effectiveRow, s.modelDefaults.find(d => d.id === id)?.contextTier);
+      const onContextWindow = size => { if (!row.contextWindow && Number.isSafeInteger(size) && size > 0) observedWindows.set(row.id, size); };
       return { model, stream: options => {
         const { effort } = withDefaults(s, row, options);
-        return dispatch(s, model, { ...options, reasoningEffort: effort });
+        return dispatch(s, model, { ...options, reasoningEffort: effort, nativeContextWindow: effectiveRow.contextWindow, onContextWindow });
       } };
     }
     async *stream(options) { yield* (await this.prepareCall(options.provider, options.model, options.signal)).stream(options); }

@@ -27,20 +27,32 @@ export function AdvancedPanel({ state, store, formId }) {
     });
   };
 
-  return h(Section, { title: '高级', summary: '刷新节奏与直连请求边界；保存后立即生效。' },
-    h('div', { className: 'kiro-form' },
-      FIELDS.map(field => h(NumberField, {
-        key: field.key, id: `${formId}-${field.key}`, label: field.label,
-        value: draft[field.key], min: ADVANCED_BOUNDS[field.key].min, max: ADVANCED_BOUNDS[field.key].max,
-        disabled: Boolean(busy.advanced), onChange: value => setDraft({ ...draft, [field.key]: value }),
-      })),
-      h('div', { className: 'kiro-field' },
-        h(Switch, {
+  return h(Section, {
+    title: '高级设置',
+    summary: '刷新节奏与直连请求边界；保存后立即生效。',
+    actions: button('保存高级设置', save, Boolean(busy.advanced) || invalid || unchanged, 'primary'),
+  },
+    h(ListBox, null,
+      FIELDS.map(field => {
+        const bounds = ADVANCED_BOUNDS[field.key];
+        return h(Row, {
+          key: field.key,
+          name: field.label,
+          meta: `范围 ${bounds.min}–${bounds.max}`,
+          control: h(NumberField, {
+            id: `${formId}-${field.key}`, label: '', compact: true,
+            value: draft[field.key], min: bounds.min, max: bounds.max,
+            disabled: Boolean(busy.advanced), onChange: value => setDraft({ ...draft, [field.key]: value }),
+          }),
+        });
+      }),
+      h(Row, {
+        name: '登录时自动打开浏览器',
+        meta: '发起 OAuth 授权时自动拉起系统浏览器',
+        switchControl: h(Switch, {
           checked: Boolean(draft.autoOpenBrowser), disabled: Boolean(busy.advanced),
           label: '登录时自动打开浏览器', onChange: () => setDraft({ ...draft, autoOpenBrowser: !draft.autoOpenBrowser }),
         }),
-        h('span', null, '登录时自动打开浏览器')),
-      h('div', { className: 'kiro-actions' },
-        button('保存高级设置', save, Boolean(busy.advanced) || invalid || unchanged, 'primary')),
-      h('p', { className: 'kiro-muted' }, '额度刷新连续失败 6 次后暂停，手动刷新成功即恢复。流超时与图片上限只作用于直连模式。')));
+      })),
+    h('p', { className: 'kiro-muted' }, '额度刷新连续失败 6 次后暂停，手动刷新成功即恢复。流超时与图片上限仅作用于直连模式。'));
 }

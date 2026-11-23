@@ -16,13 +16,29 @@ export function tabAfter(key, current) {
   return null;
 }
 
-function Overview({ state }) {
+function Overview({ state, onNavigate }) {
   const { view } = state;
-  return h(Section, { title: '连接状态', summary: MODE_LABELS[view.mode] ?? view.mode },
-    h('div', { className: 'kiro-actions' },
-      h(Chip, { tone: view.oauthConnected ? 'ok' : undefined }, view.oauthConnected ? '已保存浏览器登录' : '未保存浏览器登录'),
-      view.cliVersion ? h(Chip, null, `Kiro CLI ${view.cliVersion}`) : null,
-      h(Chip, null, view.catalogAt ? `目录更新于 ${formatWhen(view.catalogAt)}` : '目录尚未读取')));
+  const enabledCount = (view.models ?? []).filter(m => m.enabled).length;
+  const needAuth = view.mode === 'oauth' && !view.oauthConnected;
+  return h(Section, { title: '连接摘要' },
+    h(ListBox, null,
+      h(Row, {
+        name: '连接模式',
+        meta: MODE_LABELS[view.mode] ?? view.mode,
+        tags: h(Chip, { tone: needAuth ? 'warn' : 'ok' }, needAuth ? '待登录' : '已配置'),
+        control: button(needAuth ? '前往登录' : '修改连接', () => onNavigate('connection'), false, needAuth ? 'primary' : 'sm'),
+      }),
+      h(Row, {
+        name: '浏览器授权',
+        meta: view.cliVersion ? `已检测 Kiro CLI ${view.cliVersion}` : 'OAuth / Token 管理',
+        tags: h(Chip, { tone: view.oauthConnected ? 'ok' : undefined }, view.oauthConnected ? '已保存浏览器登录' : '未保存浏览器登录'),
+      }),
+      h(Row, {
+        name: '模型目录',
+        meta: view.catalogAt ? `目录更新于 ${formatWhen(view.catalogAt)}` : '目录尚未读取',
+        tags: h(Chip, { tone: enabledCount ? 'accent' : undefined }, `已启用 ${enabledCount}/${view.models?.length ?? 0}`),
+        control: button('管理模型', () => onNavigate('models'), false, 'sm'),
+      })));
 }
 
 export function Settings({ client }) {
@@ -98,8 +114,19 @@ export function Settings({ client }) {
     setTab(next);
     document.getElementById(`${formId}-tab-${next}`)?.focus();
   };
+  const modeLabel = MODE_LABELS[state.view.mode] ?? state.view.mode;
+  const enabledCount = (state.view.models ?? []).filter(m => m.enabled).length;
+  const ready = state.view.mode !== 'oauth' || state.view.oauthConnected;
+
   return h('section', { className: 'kiro-settings', 'aria-busy': busyAny || undefined, 'aria-labelledby': `${formId}-title` },
-    h('h2', { className: 'kiro-title', id: `${formId}-title` }, 'Kiro Provider'),
+    h('div', { className: 'kiro-header' },
+      h('div', { className: 'kiro-header-main' },
+        h('h2', { className: 'kiro-title', id: `${formId}-title` }, 'Kiro Provider'),
+        h('div', { className: 'kiro-subtitle' },
+          h('span', { className: 'kiro-dot', 'data-tone': ready ? 'ok' : 'warn' }),
+          h('span', null, modeLabel),
+          h('span', null, `· 已启用 ${enabledCount} 个模型`))),
+      !ready && tab !== 'connection' && button('前往登录', () => setTab('connection'), false, 'primary')),
     h('div', { className: 'kiro-tabs', role: 'tablist', 'aria-label': 'Kiro 设置分区', onKeyDown: onTabKey },
       TABS.map(item => h('button', {
         key: item.id, type: 'button', role: 'tab', id: `${formId}-tab-${item.id}`,
@@ -109,7 +136,7 @@ export function Settings({ client }) {
     h('div', { className: 'kiro-panel', role: 'tabpanel', id: `${formId}-panel-${tab}`, 'aria-labelledby': `${formId}-tab-${tab}` },
       state.notice && h(Notice, { kind: 'ok' }, state.notice),
       state.alert && h(Notice, { kind: 'error' }, state.alert),
-      tab === 'overview' && h(React.Fragment, null, h(Overview, { state }), h(UsagePanel, { state, store })),
+      tab === 'overview' && h(React.Fragment, null, h(Overview, { state, onNavigate: setTab }), h(UsagePanel, { state, store })),
       tab === 'models' && h(ModelsPanel, { state, store }),
       tab === 'connection' && h(React.Fragment, null, h(LoginPanel, { state, store, formId }), h(ConnectionPanel, { state, store, formId })),
       tab === 'advanced' && h(AdvancedPanel, { state, store, formId })),

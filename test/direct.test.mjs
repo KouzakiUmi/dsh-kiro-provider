@@ -165,3 +165,79 @@ test('DSH sends only to Kiro and completes native binary tool-result replay', as
   const state = bodies[1].conversationState;
   assert.equal(state.history.at(-1).assistantResponseMessage.toolUses[0].toolUseId, state.currentMessage.userInputMessage.userInputMessageContext.toolResults[0].toolUseId);
 });
+
+test('direct stream translates contextUsageEvent and metadata tokenUsage into DSH usage chunks', async t => {
+  const root = new Context();
+  t.after(() => root.fiber.dispose());
+  await root.plugin(LlmRuntime);
+  await root.plugin(ctx => { ctx.provide('credentials'); ctx.set('credentials', { resolve: async () => ({ value: token }) }); });
+  let turnIndex = 0;
+  t.mock.method(globalThis, 'fetch', async url => {
+    if (url === 'https://management.us-east-1.kiro.dev/?origin=KIRO_CLI') return Response.json({ models: [row] });
+    turnIndex++;
+    if (turnIndex === 1) {
+      // Kiro OAuth/session traffic commonly sends contextUsageEvent without metadataEvent.tokenUsage.
+      return describeFrames(
+        awsFrame('assistantResponseEvent', { content: '0123456789ab' }),
+        awsFrame('contextUsageEvent', { contextUsagePercentage: 12.8 }),
+      );
+    }
+    if (turnIndex === 2) {
+      // Exact disjoint tokenUsage counts must win over contextUsagePercentage without double-counting.
+      return describeFrames(
+        awsFrame('assistantResponseEvent', { content: 'cached reply' }),
+        awsFrame('metadataEvent', { stopReason: 'END_TURN', tokenUsage: { uncachedInputTokens: 0, outputTokens: 45, cacheReadInputTokens: 50_000, contextUsagePercentage: 9 } }),
+        awsFrame('contextUsageEvent', { contextUsagePercentage: 9 }),
+      );
+    }
+    if (turnIndex === 3) {
+      return describeFrames(
+        awsFrame('assistantResponseEvent', { content: 'abcd' }),
+        awsFrame('metadataEvent', { tokenUsage: { outputTokens: 20, totalTokens: 1_520 } }),
+      );
+    }
+    // Placeholder zero tokenUsage counts must still fall back to contextUsagePercentage.
+    return describeFrames(
+      awsFrame('assistantResponseEvent', { content: '01234567' }),
+      awsFrame('metadataEvent', { tokenUsage: { uncachedInputTokens: 0, outputTokens: 0 } }),
+      awsFrame('contextUsageEvent', { contextUsagePercentage: 10 }),
+    );
+  });
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const stateDir = await mkdtemp(join(tmpdir(), 'dsh-kiro-direct-usage-'));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  await root.plugin(plugin, { mode: 'direct', statePath: join(stateDir, 'state.json'), modelDefaults: [{ id: model, contextTier: 'standard' }] });
+
+  const call = await root.llm.prepareCall({ provider: 'kiro-native', model }, AbortSignal.timeout(5000));
+  assert.equal(call.context?.contextWindow, 256_000);
+
+  const collectStream = async () => {
+    const events = [];
+    for await (const c of root.llm.stream({ provider: 'kiro-native', model, messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], signal: AbortSignal.timeout(5000) })) events.push(c);
+    return events;
+  };
+
+  // Turn 1: 12.8% of native 1_000_000 window = 128_000 inputTokens (NOT scaled by 256_000 tier).
+  const first = await collectStream();
+  const usage1 = first.find(c => c.type === 'usage')?.usage;
+  assert.equal(usage1?.inputTokens, 128_000);
+  assert.equal(usage1?.outputTokens, 3);
+  assert.equal(usage1?.totalTokens, 128_003);
+
+  // Turn 2: exact uncachedInputTokens: 0 + cacheReadTokens: 50_000 + outputTokens: 45.
+  const second = await collectStream();
+  const usage2 = second.find(c => c.type === 'usage')?.usage;
+  assert.deepEqual(usage2, { inputTokens: 0, outputTokens: 45, cacheReadTokens: 50_000, totalTokens: 50_045 });
+
+  // Turn 3: totalTokens (1_520) - outputTokens (20) = 1_500 inputTokens.
+  const third = await collectStream();
+  const usage3 = third.find(c => c.type === 'usage')?.usage;
+  assert.deepEqual(usage3, { inputTokens: 1_500, outputTokens: 20, totalTokens: 1_520 });
+
+  // Turn 4: placeholder zero tokenUsage still falls back to 10% of 1_000_000 = 100_000.
+  const fourth = await collectStream();
+  const usage4 = fourth.find(c => c.type === 'usage')?.usage;
+  assert.deepEqual(usage4, { inputTokens: 100_000, outputTokens: 2, totalTokens: 100_002 });
+});

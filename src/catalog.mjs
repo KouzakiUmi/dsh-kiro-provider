@@ -20,12 +20,21 @@ export function parseCatalog(stdout) {
     unique.add(id);
     const label = row.name ?? row.display_name ?? row.displayName;
     const name = typeof label === 'string' && label.trim() && label.length <= 120 && !/[\x00-\x1f\x7f]/.test(label) ? label.trim() : id;
-    const capacity = row.context_window_tokens ?? row.contextWindowTokens;
+    const capacity = [
+      row.context_window_tokens, row.contextWindowTokens, row.context_window, row.contextWindow,
+      row.max_input_tokens, row.maxInputTokens, row.token_limits?.max_input_tokens, row.tokenLimits?.maxInputTokens,
+    ].find(positive);
+    const maxTokens = [
+      row.max_output_tokens, row.maxOutputTokens, row.token_limits?.max_output_tokens, row.tokenLimits?.maxOutputTokens,
+    ].find(positive);
     const declared = row.reasoning_efforts ?? row.reasoningEfforts;
     const efforts = Array.isArray(declared) ? [...new Set(declared.filter(x => typeof x === 'string' && effortIds.has(x)))] : [];
     const rate = typeof row.rate_multiplier === 'number' && Number.isFinite(row.rate_multiplier) && row.rate_multiplier > 0
       && String(row.rate_unit ?? '').toLowerCase() === 'credit' ? row.rate_multiplier : undefined;
-    models.push(Object.freeze({ id, name, ...(positive(capacity) ? { contextWindow: capacity } : {}), efforts: Object.freeze(efforts), ...(rate ? { creditRate: rate } : {}) }));
+    models.push(Object.freeze({
+      id, name, ...(capacity ? { contextWindow: capacity } : {}), ...(maxTokens ? { maxTokens } : {}),
+      efforts: Object.freeze(efforts), ...(rate ? { creditRate: rate } : {}),
+    }));
   }
   if (!models.length) throw new KiroProblem('Kiro CLI 没有返回可选模型。');
   return Object.freeze(models);

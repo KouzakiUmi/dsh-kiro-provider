@@ -38,12 +38,65 @@ export async function openSession(connection, cwd, model, effort) {
   return { session, extensions: hello.agentCapabilities?._meta?.kiro?.extensionMethods ?? [] };
 }
 
+const nonNeg = n => Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+const positiveInt = n => Number.isSafeInteger(n) && n > 0 ? n : undefined;
+const finitePct = n => typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : undefined;
+
+function parseTokenUsage(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const outputTokens = nonNeg(raw.outputTokens ?? raw.output_tokens);
+  const cacheReadTokens = nonNeg(raw.cachedReadTokens ?? raw.cacheReadTokens ?? raw.cacheReadInputTokens ?? raw.cache_read_input_tokens);
+  const cacheWriteTokens = nonNeg(raw.cachedWriteTokens ?? raw.cacheWriteTokens ?? raw.cacheWriteInputTokens ?? raw.cache_write_input_tokens);
+  const reasoningTokens = nonNeg(raw.thoughtTokens ?? raw.reasoningTokens ?? raw.reasoning_tokens);
+  const directInput = nonNeg(raw.uncachedInputTokens ?? raw.inputTokens ?? raw.input_tokens);
+  const totalTokens = nonNeg(raw.totalTokens ?? raw.total_tokens);
+  if ([directInput, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens, totalTokens].every(v => v === undefined)) return undefined;
+  const out = outputTokens ?? 0;
+  const cacheRead = cacheReadTokens ?? 0;
+  const cacheWrite = cacheWriteTokens ?? 0;
+  const input = directInput ?? (totalTokens !== undefined ? Math.max(0, totalTokens - out - cacheRead - cacheWrite) : 0);
+  return {
+    inputTokens: input,
+    outputTokens: out,
+    ...(totalTokens !== undefined ? { totalTokens } : { totalTokens: input + out + cacheRead + cacheWrite }),
+    ...(cacheRead > 0 ? { cacheReadTokens: cacheRead } : {}),
+    ...(cacheWrite > 0 ? { cacheWriteTokens: cacheWrite } : {}),
+    ...(reasoningTokens !== undefined && reasoningTokens > 0 ? { reasoningTokens } : {}),
+  };
+}
+
+function resolveAcpUsage({ resultUsage, metaUsage, used, contextPercentage, contextWindow, outputChars }) {
+  const candidate = resultUsage ?? metaUsage;
+  if (candidate) {
+    const hasPrompt = candidate.inputTokens > 0 || (candidate.cacheReadTokens ?? 0) > 0 || (candidate.cacheWriteTokens ?? 0) > 0;
+    if (hasPrompt) return candidate;
+    const recovered = used ?? (contextPercentage && contextWindow ? Math.round((contextPercentage / 100) * contextWindow) : 0);
+    if (recovered > 0) {
+      const outputTokens = candidate.outputTokens || (outputChars > 0 ? Math.max(1, Math.round(outputChars / 4)) : 0);
+      return {
+        ...candidate,
+        inputTokens: recovered,
+        outputTokens,
+        totalTokens: recovered + outputTokens + (candidate.cacheReadTokens ?? 0) + (candidate.cacheWriteTokens ?? 0),
+      };
+    }
+    return candidate.outputTokens > 0 || candidate.totalTokens > 0 || used === 0 ? candidate : undefined;
+  }
+  const inputTokens = used ?? (contextPercentage && contextWindow ? Math.round((contextPercentage / 100) * contextWindow) : undefined);
+  if (inputTokens === undefined) return undefined;
+  return { inputTokens, outputTokens: 0, totalTokens: inputTokens };
+}
+
 function updateFor(params, id) {
   if (params?.sessionId !== id || params.update?._meta?.kiro?.replay === true) return;
+  if (params._notification === '_kiro.dev/metadata') return { kind: 'metadata', data: params };
   const update = params.update;
-  if (update?.content?.type !== 'text' || typeof update.content.text !== 'string') return;
-  if (update.sessionUpdate === 'agent_message_chunk') return ['text', update.content.text];
-  if (update.sessionUpdate === 'agent_thought_chunk') return ['reasoning', update.content.text];
+  if (!update || typeof update !== 'object') return;
+  if (update.sessionUpdate === 'usage_update') return { kind: 'usage_update', data: update };
+  if (update.sessionUpdate === '_kiro.dev/metadata') return { kind: 'metadata', data: update };
+  if (update.content?.type !== 'text' || typeof update.content.text !== 'string') return;
+  if (update.sessionUpdate === 'agent_message_chunk') return { kind: 'chunk', channel: 'text', text: update.content.text };
+  if (update.sessionUpdate === 'agent_thought_chunk') return { kind: 'chunk', channel: 'reasoning', text: update.content.text };
 }
 
 async function* streamAcp(target, options, prompt, connect) {
@@ -55,13 +108,31 @@ async function* streamAcp(target, options, prompt, connect) {
     id = session.sessionId;
     const queue = [];
     let count = 0, size = 0, wake, done = false, result, failure;
+    let observedUsed, observedWindow = positiveInt(options.nativeContextWindow), contextPercentage, metaUsage, outputChars = 0;
     const notify = () => { wake?.(); wake = undefined; };
+    const recordMeta = data => {
+      const parsed = parseTokenUsage(data?.tokenUsage);
+      if (parsed) metaUsage = parsed;
+      contextPercentage = finitePct(data?.contextUsagePercentage) ?? finitePct(data?.tokenUsage?.contextUsagePercentage) ?? contextPercentage;
+    };
     unsubscribe = connection.subscribe(params => {
-      const update = updateFor(params, id);
-      if (!update || !update[1] || failure) return;
-      size += Buffer.byteLength(update[1]);
+      const event = updateFor(params, id);
+      if (!event || failure) return;
+      if (event.kind === 'usage_update') {
+        const nextWindow = positiveInt(event.data.size);
+        if (nextWindow) {
+          observedWindow = nextWindow;
+          options.onContextWindow?.(nextWindow);
+        }
+        const used = nonNeg(event.data.used);
+        if (used !== undefined) observedUsed = used;
+        return;
+      }
+      if (event.kind === 'metadata') { recordMeta(event.data); return; }
+      if (!event.text) return;
+      size += Buffer.byteLength(event.text);
       if (size > MAX_OUTPUT || ++count > 20_000) failure = new Error('Kiro 响应超过 2 MB 或分片上限。');
-      else queue.push(update);
+      else queue.push([event.channel, event.text]);
       notify();
     });
     const terminal = connection.request('session/prompt', { sessionId: id, prompt: [{ type: 'text', text: prompt }] }, 240_000).then(
@@ -73,6 +144,7 @@ async function* streamAcp(target, options, prompt, connect) {
       if (!queue.length) { await new Promise(resolve => { wake = resolve; }); continue; }
       const batch = queue.splice(0);
       for (const [type, delta] of batch) {
+        outputChars += delta.length;
         let block = blocks.get(type);
         if (!block) {
           block = { index: blocks.size, chunks: [] };
@@ -85,9 +157,15 @@ async function* streamAcp(target, options, prompt, connect) {
     }
     await terminal;
     if (failure) throw failure;
+    recordMeta(result?._meta?.kiro ?? result?._meta);
     for (const [type, block] of blocks) yield { type: 'block-end', index: block.index, block: { type, text: block.chunks.join('') } };
+    const usage = resolveAcpUsage({
+      resultUsage: parseTokenUsage(result?.usage ?? result?._meta?.usage),
+      metaUsage, used: observedUsed, contextPercentage, contextWindow: observedWindow, outputChars,
+    });
     const kind = new Map([['end_turn', 'stop'], ['max_tokens', 'max-tokens'], ['cancelled', 'aborted'], ['refusal', 'refusal']]).get(result?.stopReason);
     if (!kind || (!blocks.has('text') && kind === 'stop')) throw new Error('Kiro 未返回可用回答。');
+    if (usage) yield { type: 'usage', usage };
     if (kind === 'refusal') yield { type: 'finish', reason: { kind: 'error', failure: { code: 'CONTENT_REFUSED', message: 'Kiro 拒绝回答此请求。' } } };
     else if (kind === 'aborted') yield { type: 'finish', reason: { kind, failure: { code: 'ABORTED', message: 'Kiro 请求已取消。' } } };
     else yield { type: 'finish', reason: { kind } };

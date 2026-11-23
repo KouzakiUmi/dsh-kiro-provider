@@ -1,7 +1,7 @@
 {
   "name": "dsh-kiro-provider",
   "displayName": "Kiro Provider",
-  "version": "0.1.0-alpha.12",
+  "version": "0.1.1",
   "description": "Connect DeepSeek Harness directly to Kiro or use the official Kiro CLI.",
   "private": true,
   "type": "module",

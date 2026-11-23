@@ -249,3 +249,142 @@ test('diagnostic classification does not disclose upstream strings', () => {
   assert.doesNotMatch(failure.message, /ksk_/);
   assert.match(classifyCliFailure('This version of Kiro is no longer supported').message, /更新官方/);
 });
+
+test('catalog accepts context window field aliases without inventing missing values', () => {
+  const rows = parseCatalog(JSON.stringify({
+    models: [
+      { id: 'm-snake', context_window: 128_000, max_output_tokens: 8_192 },
+      { id: 'm-camel', contextWindow: 200_000, maxOutputTokens: 16_384 },
+      { id: 'm-nested', token_limits: { max_input_tokens: 500_000, max_output_tokens: 32_768 } },
+    ],
+  }));
+  assert.deepEqual(rows.map(r => [r.id, r.contextWindow, r.maxTokens]), [
+    ['m-snake', 128_000, 8_192],
+    ['m-camel', 200_000, 16_384],
+    ['m-nested', 500_000, 32_768],
+  ]);
+});
+
+test('ACP path emits usage before finish from usage_update, _kiro.dev/metadata, and PromptResponse.usage', async () => {
+  const observedSizes = [];
+  const connectWith = (pushEvents, promptResult = { stopReason: 'end_turn' }) => () => {
+    let listener;
+    return {
+      async request(method) {
+        if (method === 'initialize') return { protocolVersion: 1 };
+        if (method === 'session/new') return { sessionId: 's1', modes: { currentModeId: AGENT_ID }, configOptions: [{ id: 'model', currentValue: 'auto' }] };
+        pushEvents(listener);
+        return promptResult;
+      },
+      subscribe(fn) { listener = fn; return () => { listener = undefined; }; },
+      async close() {},
+    };
+  };
+
+  // Case 1: ACP usage_update only -> emits usage chunk & reports observed context window size.
+  const usageUpdateChunks = await collect(generate(
+    { mode: 'local', binary: 'fake', process: { cwd: '/fixture' } },
+    { ...request, onContextWindow: s => observedSizes.push(s) },
+    {
+      connect: connectWith(push => {
+        push({ sessionId: 's1', update: { sessionUpdate: 'usage_update', used: 4_200, size: 200_000 } });
+        push({ sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'ok' } } });
+      }),
+    },
+  ));
+  assert.deepEqual(observedSizes, [200_000]);
+  assert.deepEqual(usageUpdateChunks.slice(-2), [
+    { type: 'usage', usage: { inputTokens: 4_200, outputTokens: 0, totalTokens: 4_200 } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ]);
+
+  // Case 2: PromptResponse.usage takes precedence and maps ACP cache/thought fields.
+  const promptUsageChunks = await collect(generate(
+    { mode: 'local', binary: 'fake', process: { cwd: '/fixture' } },
+    request,
+    {
+      connect: connectWith(push => {
+        push({ sessionId: 's1', update: { sessionUpdate: 'usage_update', used: 9_999, size: 200_000 } });
+        push({ sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done' } } });
+      }, {
+        stopReason: 'end_turn',
+        usage: { inputTokens: 1_200, outputTokens: 300, cachedReadTokens: 800, thoughtTokens: 150, totalTokens: 2_300 },
+      }),
+    },
+  ));
+  assert.deepEqual(promptUsageChunks.slice(-2), [
+    { type: 'usage', usage: { inputTokens: 1_200, outputTokens: 300, totalTokens: 2_300, cacheReadTokens: 800, reasoningTokens: 150 } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ]);
+
+  // Case 3: AcpConnection forwards _kiro.dev/metadata notifications and scales percentage by native window.
+  const child = new EventEmitter();
+  Object.assign(child, { exitCode: null, signalCode: null, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill() { this.exitCode = 0; queueMicrotask(() => this.emit('close')); } });
+  const conn = new AcpConnection('fake', {}, { spawn: () => child });
+  const seen = [];
+  conn.subscribe(p => seen.push(p));
+  child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', method: '_kiro.dev/metadata', params: { sessionId: 's1', contextUsagePercentage: 25 } })}\n`);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]._notification, '_kiro.dev/metadata');
+  await conn.close();
+
+  const metaChunks = await collect(generate(
+    { mode: 'local', binary: 'fake', process: { cwd: '/fixture' } },
+    { ...request, nativeContextWindow: 200_000 },
+    {
+      connect: connectWith(push => {
+        push({ sessionId: 's1', _notification: '_kiro.dev/metadata', contextUsagePercentage: 25 });
+        push({ sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'meta' } } });
+      }),
+    },
+  ));
+  assert.deepEqual(metaChunks.slice(-2), [
+    { type: 'usage', usage: { inputTokens: 50_000, outputTokens: 0, totalTokens: 50_000 } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ]);
+});
+
+test('adapter learns contextWindow from ACP usage_update.size when CLI catalog omits it', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-kiro-acp-win-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = createStore({ file: join(root, 'state.json'), validate: (kind, value) => snapshotValidators[kind]?.(value) });
+  const current = { mode: 'local', cliPath: '', keyRef: 'KIRO_API_KEY', disabledModels: [], enabledModels: [], modelDefaults: [] };
+  const c = createController({
+    root,
+    store,
+    settings: () => current,
+    readKey: async () => undefined,
+    deps: {
+      resolve: async () => 'fake-binary',
+      options: async () => ({ cwd: root, env: {} }),
+      check: async () => {},
+      version: async () => '3.5.0',
+      run: async () => ({ code: 0, stdout: JSON.stringify([{ id: 'auto', name: 'Auto' }]) }),
+    },
+  });
+  const connect = () => {
+    let listener;
+    return {
+      async request(method) {
+        if (method === 'initialize') return { protocolVersion: 1 };
+        if (method === 'session/new') return { sessionId: 's1', modes: { currentModeId: AGENT_ID }, configOptions: [{ id: 'model', currentValue: 'auto' }] };
+        listener({ sessionId: 's1', update: { sessionUpdate: 'usage_update', used: 2_500, size: 200_000 } });
+        listener({ sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } } });
+        return { stopReason: 'end_turn' };
+      },
+      subscribe(fn) { listener = fn; return () => { listener = undefined; }; },
+      async close() {},
+    };
+  };
+  const { adapterFor } = await import('../src/llm-adapter.mjs');
+  const adapter = adapterFor(c, { get: () => undefined }, { generate: (target, opts) => generate(target, opts, { connect }) });
+  await c.ready;
+  await c.refresh(c.snapshot());
+  assert.equal((await adapter.resolveModel('kiro-native', 'auto')).context, undefined);
+
+  const chunks = await collect(adapter.stream({ provider: 'kiro-native', model: 'auto', messages: [msg('Hello')] }));
+  assert.deepEqual(chunks.find(chunk => chunk.type === 'usage')?.usage, { inputTokens: 2_500, outputTokens: 0, totalTokens: 2_500 });
+  assert.equal((await adapter.resolveModel('kiro-native', 'auto')).context?.contextWindow, 200_000);
+  assert.equal((await adapter.listModels()).find(m => m.id === 'auto')?.context?.contextWindow, 200_000);
+  c.dispose();
+});
