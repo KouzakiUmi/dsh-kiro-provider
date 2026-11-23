@@ -122,12 +122,14 @@ test('cancelling the Messages response aborts the underlying binary fetch signal
   assert.equal(upstream.signal.aborted, true);
 });
 
-test('DSH sends only to Kiro and completes native binary tool-result replay', async t => {
+test('DSH replays native tool results to Kiro without replaying reasoning as text', async t => {
   const root = new Context();
   t.after(() => root.fiber.dispose());
   await root.plugin(LlmRuntime);
   await root.plugin(ctx => { ctx.provide('credentials'); ctx.set('credentials', { resolve: async () => ({ value: token }) }); });
   const bodies = [];
+  const reasoning = 'FIXTURE_REASONING_NOT_FOR_REPLAY';
+  const assistantText = 'FIXTURE_ASSISTANT_TEXT';
   t.mock.method(globalThis, 'fetch', async (url, init) => {
     assert.equal(typeof url, 'string');
     assert.equal(init.headers.authorization, `Bearer ${token}`);
@@ -139,6 +141,8 @@ test('DSH sends only to Kiro and completes native binary tool-result replay', as
     const wireName = context.tools[0].toolSpecification.name;
     assert.match(wireName, /^[A-Za-z][A-Za-z0-9_]{0,63}$/);
     return bodies.length === 1 ? describeFrames(
+      awsFrame('reasoningContentEvent', { text: reasoning }),
+      awsFrame('assistantResponseEvent', { content: assistantText }),
       awsFrame('toolUseEvent', { toolUseId: 'toolu_demo', name: wireName, input: '{"query":' }),
       awsFrame('toolUseEvent', { input: '"alpha"}', stop: true }),
     ) : describeFrames(awsFrame('assistantResponseEvent', { content: 'KIRO_DSH_TOOL_OK' }));
@@ -154,6 +158,8 @@ test('DSH sends only to Kiro and completes native binary tool-result replay', as
   }
   const a = await turn([initial]);
   assert.equal(a.finish?.reason?.kind, 'tool-calls', JSON.stringify(a.finish));
+  assert.deepEqual(a.content.slice(0, 2), [{ type: 'reasoning', text: reasoning }, { type: 'text', text: assistantText }]);
+  assert.equal(a.finish.replayState.blocks[0].thinkingSignature, '');
   const call = a.content.find(c => c.type === 'tool-call');
   assert.equal(call?.name, tool);
   assert.deepEqual(JSON.parse(call.arguments), { query: 'alpha' });
@@ -163,7 +169,10 @@ test('DSH sends only to Kiro and completes native binary tool-result replay', as
   assert.equal(b.finish?.reason?.kind, 'stop');
   assert.equal(b.content[0]?.text, 'KIRO_DSH_TOOL_OK');
   const state = bodies[1].conversationState;
+  assert.equal(JSON.stringify(bodies[1]).includes(reasoning), false);
+  assert.equal(state.history.at(-1).assistantResponseMessage.content, assistantText);
   assert.equal(state.history.at(-1).assistantResponseMessage.toolUses[0].toolUseId, state.currentMessage.userInputMessage.userInputMessageContext.toolResults[0].toolUseId);
+  assert.equal(prior.content[0].text, reasoning);
 });
 
 test('direct stream translates contextUsageEvent and metadata tokenUsage into DSH usage chunks', async t => {

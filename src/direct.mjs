@@ -29,7 +29,9 @@ export function directProfile(row, route, retryPolicy, tuning = {}) {
     input: row.inputModalities, output: ['text'], contextWindow: tuning.contextWindow ?? row.contextWindow, maxTokens: row.maxTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, reasoning: row.efforts.length > 0,
     thinkingLevelMap: Object.fromEntries(levels.map(level => [level, level === 'off' ? undefined : row.efforts.includes(level) ? level : null])),
-    ...(row.efforts.length ? { compat: { forceAdaptiveThinking: true } } : {}),
+    // Kiro's bridge emits unsigned thinking. Keep it typed in the local Messages
+    // request so directWire drops it rather than forwarding it as assistant text.
+    compat: { allowEmptySignature: true, ...(row.efforts.length ? { forceAdaptiveThinking: true } : {}) },
   };
   return { baseURL: sdkOrigin, provider: route, displayName: 'Kiro Provider', models: [model], modelErrors: new Map(), configuredMaxTokens: new Map(),
     streamIdleTimeoutMs: tuning.streamIdleTimeoutMs ?? 180_000, maxRequestImageBytes: tuning.maxRequestImageBytes ?? 10_000_000,

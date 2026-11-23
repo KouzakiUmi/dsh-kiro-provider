@@ -47,6 +47,7 @@ Client（浏览器 React，`src/client/*.js`）：`styles → kit → store → 
 | 额度视图投影 | `client/usage.js` quotaStatusView 纯函数（error>需登录>stale>空>最差窗口） |
 | 会话输入栏药丸 | `client/pill.js`：上下文档位药丸（256K/500K/1M 快捷档+默认，按模型持久化 contextTier，原生窗口封顶；注入 ModelDirectory 本体读会话选择，写入走 modelContext 字段级合并 op）+ 额度药丸（30s 静默 `status` 轮询、迷你条与弹窗详情、手动 `usage` 刷新，仅 kiro-native 会话渲染） |
 | token 用量上报与窗口学习 | `adapter.mjs` 解析 ACP `usage_update` / `_kiro.dev/metadata` / `PromptResponse.usage`，在 `usage_update.size` 时学习窗口；`llm-adapter.mjs` 以 observedWindows 覆盖目录缺失容量；`direct-stream.mjs` 用 contextUsagePercentage / totalTokens 补全计数 |
+| 直连推理与历史回放 | `direct.mjs` 的进程内 Messages 模型允许空签名，避免 pi-ai 将无签名推理转成正文；`direct-wire.mjs` 只转发助手正文和工具调用，不回传推理块 |
 
 ## 技术范式锁
 
