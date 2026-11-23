@@ -3,7 +3,7 @@
   "displayName": "Kiro Provider",
   "version": "0.1.1",
   "description": "Connect DeepSeek Harness directly to Kiro or use the official Kiro CLI.",
-  "private": true,
+  "private": false,
   "type": "module",
   "main": "./lib/index.mjs",
   "exports": {
