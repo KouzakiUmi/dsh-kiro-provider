@@ -36,14 +36,14 @@ export function ModelsPanel({ state, store }) {
     filtered.length === 0
       ? h(EmptyState, { emptyText: query ? '没有匹配的模型。' : '还没有读取到模型。完成登录或保存连接后点击刷新模型。' })
       : h(ListBox, null, visible.map(model => h(ModelRow, {
-        key: model.id, model, defaults: defaults.get(model.id), store,
+        key: model.id, model, rows: view.models, defaults: defaults.get(model.id), store,
         busy: Boolean(busy[`model:${model.id}`]) || Boolean(busy.catalog),
       }))),
     filtered.length > PAGE_SIZE
       && button(expanded ? '收起' : `展开全部 ${filtered.length} 个模型`, () => setExpanded(value => !value), false, 'quiet'));
 }
 
-function ModelRow({ model, defaults, busy, store }) {
+function ModelRow({ model, rows, defaults, busy, store }) {
   const [open, setOpen] = React.useState(false);
   const [effort, setEffort] = React.useState(defaults?.effort ?? '');
   const [maxTokens, setMaxTokens] = React.useState(defaults?.maxTokens ? String(defaults.maxTokens) : '');
@@ -61,10 +61,11 @@ function ModelRow({ model, defaults, busy, store }) {
   const unchanged = effort === (defaults?.effort ?? '') && tokens === (defaults?.maxTokens ?? 0) && contextTier === (defaults?.contextTier ?? '');
   const displayName = readableModelName(model.id, model.name);
   const badge = modelRateBadge(model.creditRate);
+  const successor = model.legacy ? legacySuccessor(rows, model.id) : null;
   const tags = [
     model.contextWindow ? h(Chip, { key: 'ctx' }, `${formatTokens(model.contextWindow)} 上下文`) : null,
     badge ? h(Chip, { key: 'rate', tone: RATE_TONE[badge.tone], title: `扣费倍率：每请求消耗 ${badge.multiplier}× credits` }, badge.label) : null,
-    model.legacy ? h(Chip, { key: 'legacy', tone: 'warn', title: supersededBy(model.id) ? `已由 ${supersededBy(model.id)} 替代` : '同家族已有更新版本' }, '旧版') : null,
+    model.legacy ? h(Chip, { key: 'legacy', tone: 'warn', title: successor ? `已由 ${successor} 替代` : '同家族已有更新版本' }, '旧版') : null,
     model.inputModalities?.includes('image') ? h(Chip, { key: 'img' }, '图片') : null,
   ].filter(Boolean);
 

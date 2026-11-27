@@ -6,6 +6,8 @@ import { basename, isAbsolute, join } from 'node:path';
 
 export const profileNames = ['local', 'managed', 'key'];
 const cliName = process.platform === 'win32' ? 'kiro-cli.exe' : 'kiro-cli';
+// 官方二进制命名：3.x 单一 kiro-cli；2.x Windows 桌面应用内核为版本化 chat-cli-x.y.z。
+const cliFilePattern = process.platform === 'win32' ? /^(?:kiro-cli|chat-cli-\d+\.\d+\.\d+)\.exe$/i : /^kiro-cli$/;
 const DENY = 'rules:\n  - capability: all\n    effect: deny\n';
 export const AGENT_ID = 'dsh-provider-text';
 const AGENT = JSON.stringify({ name: AGENT_ID, description: 'DSH text conversation', tools: [], includeMcpJson: false, includePowers: false, resources: [], permissions: { rules: [{ capability: 'all', effect: 'deny' }] } });
@@ -25,7 +27,7 @@ export function classifyCliFailure(text) {
 
 export async function resolveCli(configured = '', path = process.env.PATH ?? '') {
   const fileName = name => process.platform === 'win32' ? name.toLowerCase() : name;
-  if (configured && (!isAbsolute(configured) || fileName(basename(configured)) !== cliName)) {
+  if (configured && (!isAbsolute(configured) || !cliFilePattern.test(fileName(basename(configured))))) {
     throw new KiroProblem('请在插件配置中指定 kiro-cli 原生可执行文件的绝对路径。');
   }
   const dirs = path.split(process.platform === 'win32' ? ';' : ':');
@@ -38,6 +40,35 @@ export async function resolveCli(configured = '', path = process.env.PATH ?? '')
       return target;
     } catch (error) {
       if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error?.code)) throw error;
+    }
+  }
+  if (!configured && process.platform === 'win32') {
+    // 2.x Windows 桌面应用的自更新布局：%LOCALAPPDATA%\kiro-cli\run\chat-cli-<version>.exe（PATH 无 shim）。
+    // 3.x 起官方改为单一 kiro-cli 走 PATH，这里仅作兼容回退；多版本共存时取最高版本号。
+    const local = process.env.LOCALAPPDATA;
+    if (local && isAbsolute(local)) {
+      let names;
+      try {
+        names = await readdir(join(local, 'kiro-cli', 'run'));
+      } catch (error) {
+        if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error?.code)) throw error;
+      }
+      const versioned = (names ?? [])
+        .map(name => /^chat-cli-(\d+)\.(\d+)\.(\d+)\.exe$/i.exec(name))
+        .filter(Boolean)
+        .sort((a, b) => b[1] - a[1] || b[2] - a[2] || b[3] - a[3]);
+      // 逐候选容错与 PATH 循环同语义：断链/权限拒绝只跳过该版本，不放弃次高版本。
+      for (const match of versioned) {
+        try {
+          const candidate = join(local, 'kiro-cli', 'run', match[0]);
+          const target = await realpath(candidate);
+          if (!(await lstat(target)).isFile()) continue;
+          await access(target, constants.X_OK);
+          return target;
+        } catch (error) {
+          if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error?.code)) throw error;
+        }
+      }
     }
   }
   throw new KiroProblem('找不到官方 Kiro CLI。请先安装，或在插件配置中设置 cliPath。');
@@ -139,11 +170,19 @@ export function runKiro(binary, args, options, { input, signal, timeout = 20_000
   });
 }
 
+// 版本门禁：V3 引擎在 2.37（2.x 末代）已可用且 3.x 语义相同；2.36 及更早的 V3 预览与 1.x 拒绝。
+export function supportedCli(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version ?? '');
+  if (!match) return false;
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  return major >= 3 || (major === 2 && minor >= 37);
+}
+
 export async function cliVersion(binary, options, signal) {
   const { code, stdout } = await runKiro(binary, ['--version'], options, { signal, timeout: 5_000, limit: 2048 });
   const match = /^kiro(?:[- ]cli)?[ \t]+((\d+)\.(\d+)\.(\d+)(?:[-+][\w.-]+)?)[ \t]*\r?$/im.exec(stdout);
-  if (code !== 0 || !match || Number(match[2]) < 3 || (Number(match[2]) === 3 && Number(match[3]) < 5)) {
-    throw new KiroProblem('Kiro Provider 需要官方 Kiro CLI 3.5 或更新版本。');
+  if (code !== 0 || !match || !supportedCli(match[1])) {
+    throw new KiroProblem('Kiro Provider 需要官方 Kiro CLI 2.37+ 或 3.x。');
   }
   return match[1];
 }

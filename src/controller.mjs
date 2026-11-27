@@ -106,7 +106,7 @@ export function createController({ root, store, settings, readKey, readOAuth, on
     return { supported: true, ...(view.value ?? {}), at: view.at ?? null, stale: view.stale, ...(view.error ? { error: view.error } : {}), ...scheduler.state() };
   }
 
-  // 三态启停：显式关闭 > 显式开启 > 推荐默认（已核实后继 + 同家族更高版本的旧版默认关闭）。
+  // 三态启停：显式关闭 > 显式开启 > 推荐默认（同家族更高版本或后继在目录内存在的旧版默认关闭）。
   // legacy 按 rows 引用缓存，避免逐行调用时重复 O(n²) 判定。
   let legacyCache = { rows: null, ids: [] };
   function legacyIds(rows) {

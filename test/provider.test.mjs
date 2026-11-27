@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { AcpConnection } from '../src/acp.mjs';
 import { generate, promptOf } from '../src/adapter.mjs';
-import { AGENT_ID, cliOptions, checkRuntimeHome, classifyCliFailure } from '../src/cli.mjs';
+import { AGENT_ID, cliOptions, checkRuntimeHome, classifyCliFailure, resolveCli, supportedCli } from '../src/cli.mjs';
 import { createController, snapshotValidators } from '../src/controller.mjs';
 import { parseCatalog } from '../src/catalog.mjs';
 import { createStore } from '../src/store.mjs';
@@ -24,7 +24,63 @@ test('catalog accepts observed field variants, does not invent missing facts', (
   assert.deepEqual(rows, [{ id:'auto', name:'Auto', efforts:[] },
     { id:'claude-sonnet-5', name:'Claude', contextWindow:1000000, efforts:['low','max'] }]);
   assert.throws(() => parseCatalog('{shaped wrong'));
+  // CLI 2.x/3.x 实测 JSON：model_id/model_name/context_window_tokens/rate_multiplier。
+  const real = parseCatalog(JSON.stringify({ models: [
+    { model_name: 'deepseek-3.2', description: 'x', model_id: 'deepseek-3.2', context_window_tokens: 164000, rate_multiplier: 0.25, rate_unit: 'Credit' },
+    { model_name: 'qwen3-coder-next', model_id: 'qwen3-coder-next', context_window_tokens: 256000, rate_multiplier: 0.05, rate_unit: 'Credit' },
+  ], default_model: 'deepseek-3.2' }));
+  assert.deepEqual(real, [
+    { id: 'deepseek-3.2', name: 'deepseek-3.2', contextWindow: 164000, efforts: [], creditRate: 0.25 },
+    { id: 'qwen3-coder-next', name: 'qwen3-coder-next', contextWindow: 256000, efforts: [], creditRate: 0.05 },
+  ]);
 });
+
+test('CLI 版本门禁接受 2.37+ 与 3.x，拒绝 1.x 与缺失输出', () => {
+  for (const ok of ['2.37.0', '2.37.1', '3.0.0', '3.5.0', '3.6.2', '10.0.0']) assert.equal(supportedCli(ok), true, ok);
+  for (const bad of ['1.9.0', '2.0.0', '2.36.9', '', undefined, 'garbage']) assert.equal(supportedCli(bad), false, String(bad));
+});
+
+test('CLI 发现支持配置路径命名变体与 Windows 版本化布局回退', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-kiro-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const exe = process.platform === 'win32' ? 'kiro-cli.exe' : 'kiro-cli';
+  const bin = join(root, 'bin');
+  await mkdir(bin);
+  await writeFile(join(bin, exe), '');
+  if (process.platform !== 'win32') await chmod(join(bin, exe), 0o755);
+  // PATH 解析按精确文件名命中。
+  assert.equal(await resolveCli('', `${bin}${process.platform === 'win32' ? ';' : ':'}/nonexistent`), join(bin, exe));
+  // 配置路径拒绝任意二进制名。
+  await assert.rejects(resolveCli(join(root, 'bin', 'evil.exe')), /绝对路径/);
+  await assert.rejects(resolveCli('relative-kiro-cli'), /绝对路径/);
+  if (process.platform === 'win32') {
+    // 桌面应用版本化内核命名被接受（2.x Windows 布局）。
+    const versioned = join(root, 'bin', 'chat-cli-2.37.0.exe');
+    await writeFile(versioned, '');
+    assert.equal(await resolveCli(versioned), versioned);
+  }
+});
+
+test('LOCALAPPDATA 版本化布局回退：扫描取数字最高版本，坏条目跳过不放弃次高', { skip: process.platform !== 'win32' }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-kiro-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const run = join(root, 'kiro-cli', 'run');
+  await mkdir(run, { recursive: true });
+  for (const name of ['chat-cli-2.9.0.exe', 'chat-cli-2.37.0.exe']) {
+    await writeFile(join(run, name), '');
+    if (process.platform !== 'win32') await chmod(join(run, name), 0o755);
+  }
+  await writeFile(join(run, 'not-a-cli.txt'), '');
+  const previous = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = root;
+  t.after(() => { if (previous === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = previous; });
+  // PATH 无命中时回退扫描，数字排序取 2.37.0 而非字符串排序的 2.9.0。
+  assert.equal(await resolveCli('', 'Z:\\nonexistent'), join(run, 'chat-cli-2.37.0.exe'));
+  // 删除最高版本后回退取次高。
+  await rm(join(run, 'chat-cli-2.37.0.exe'));
+  assert.equal(await resolveCli('', 'Z:\\nonexistent'), join(run, 'chat-cli-2.9.0.exe'));
+});
+
 
 test('setup separates Kiro homes, filters host secrets, and rejects edited policies', async t => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-kiro-test-'));

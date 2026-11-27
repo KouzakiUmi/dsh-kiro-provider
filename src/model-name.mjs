@@ -1,5 +1,5 @@
 // 显示投影（host/client 共享纯函数）：请求 ID 原样保留，显示名清理 ID 格式；
-// 扣费倍率只由徽标表达，不拼进名称；旧版判定 = 已核实的外部后继关系 + 目录内同家族更高版本。
+// 扣费倍率只由徽标表达，不拼进名称；旧版判定 = 目录内同家族更高版本 + 跨世代外部后继在目录内实际存在。
 // 外部后继表来源与核验日期见 docs/model-curation.md；变体型号（sol/terra/luna）不互相压制。
 
 const BRANDS = {
@@ -42,22 +42,36 @@ export function selectorRateBadge(rate) {
 
 const VERSION_SEGMENT = /^[a-z]?(\d+(?:\.\d+)*)$/i;
 
-// 已核实的外部后继关系（2026-11-21 直接访问 Artificial Analysis 排行榜内嵌数据核对 deprecated 标志，
+// 已核实的外部跨世代后继关系（2026-11-21 直接访问 Artificial Analysis 排行榜内嵌数据核对 deprecated 标志，
 // 辅以厂商平台文档；来源与逐条证据见 docs/model-curation.md）。
-// 即使后继不在 Kiro 目录内，这些型号也按旧版默认关闭；用户可显式开启。
+// 跨世代：后继与现役型号家族不同（GPT-5.6→6.x、DeepSeek 3.2→V4.x 等），目录内同家族版本规则覆盖不到。
+// 第二项是后继的 Kiro ID 前缀：仅当目录内实际存在匹配该前缀的型号时压制才生效——
+// 厂商侧弃用不等于 Kiro 侧弃用，目录缩水时幸存者（可能是该账号唯一可用模型）必须保持默认开启。
 const SUPERSEDED = new Map([
-  ['gpt-5.6-sol', 'GPT-6.2 Sol'],
-  ['gpt-5.6-terra', 'GPT-6.1 Terra'],
-  ['gpt-5.6-luna', 'GPT-6 Luna'],
-  ['deepseek-3.2', 'DeepSeek V4.1 Flash 1017'],
-  ['glm-5', 'GLM-5.3'],
-  ['kimi-k3', 'Kimi K3.1 Pro'],
-  ['minimax-m2.5', 'MiniMax M3.1 Flash'],
-  ['minimax-m2.1', 'MiniMax M3.1 Flash'],
-  ['qwen3-coder-next', 'Qwen4 Max'],
+  ['gpt-5.6-sol', { successor: 'GPT-6.2 Sol', prefixes: ['gpt-6'] }],
+  ['gpt-5.6-terra', { successor: 'GPT-6.1 Terra', prefixes: ['gpt-6'] }],
+  ['gpt-5.6-luna', { successor: 'GPT-6 Luna', prefixes: ['gpt-6'] }],
+  ['deepseek-3.2', { successor: 'DeepSeek V4.1 Flash 1017', prefixes: ['deepseek-v4', 'deepseek-4'] }],
+  ['glm-5', { successor: 'GLM-5.3', prefixes: ['glm-5.3', 'glm-6'] }],
+  ['kimi-k3', { successor: 'Kimi K3.1 Pro', prefixes: ['kimi-k3.1', 'kimi-k4'] }],
+  ['minimax-m2.5', { successor: 'MiniMax M3.1 Flash', prefixes: ['minimax-m3'] }],
+  ['minimax-m2.1', { successor: 'MiniMax M3.1 Flash', prefixes: ['minimax-m3'] }],
+  ['qwen3-coder-next', { successor: 'Qwen4 Max', prefixes: ['qwen4'] }],
 ]);
 
-export const supersededBy = id => SUPERSEDED.get(String(id).toLowerCase());
+export const supersededBy = id => SUPERSEDED.get(String(id).toLowerCase())?.successor;
+
+// 外部后继是否在目录内实际存在（按已核实的 Kiro ID 前缀，大小写不敏感）。
+function successorPresent(rows, entry) {
+  return rows.some(row => typeof row?.id === 'string' && entry.prefixes.some(prefix => row.id.toLowerCase().startsWith(prefix)));
+}
+
+// 旧版标记的展示后继：仅当外部压制实际生效（后继在目录内）时返回显示名，
+// 同家族压制或后继缺席时返回 null，由调用方回退到通用文案。
+export function legacySuccessor(rows, id) {
+  const entry = SUPERSEDED.get(String(id).toLowerCase());
+  return entry && successorPresent(Array.isArray(rows) ? rows : [], entry) ? entry.successor : null;
+}
 
 function parseVersion(id) {
   // 与显示名同规则先把版本连字符转点，避免 4-5 与 4.5 误分家族。
@@ -76,13 +90,16 @@ function compareVersions(a, b) {
   return 0;
 }
 
-// 旧版 = 已核实外部后继 + 同家族存在更高版本。默认关闭建议由此产生；用户显式开关优先。
+// 旧版 = 目录内同家族存在更高版本，或跨世代外部后继在目录内实际存在。
+// 默认关闭建议由此产生；用户显式开关优先。后继缺席时幸存者不按旧版压制。
 export function legacyModelIds(rows) {
+  const list = Array.isArray(rows) ? rows : [];
   const parsed = [];
   const legacy = new Set();
-  for (const row of Array.isArray(rows) ? rows : []) {
+  for (const row of list) {
     if (!row || typeof row.id !== 'string') continue;
-    if (SUPERSEDED.has(row.id.toLowerCase())) legacy.add(row.id);
+    const external = SUPERSEDED.get(row.id.toLowerCase());
+    if (external && successorPresent(list, external)) legacy.add(row.id);
     const info = parseVersion(row.id);
     if (info) parsed.push({ id: row.id, ...info });
   }
